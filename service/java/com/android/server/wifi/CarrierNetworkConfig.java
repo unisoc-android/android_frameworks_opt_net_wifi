@@ -24,10 +24,14 @@ import android.content.IntentFilter;
 import android.database.ContentObserver;
 import android.net.Uri;
 import android.net.wifi.EAPConstants;
+import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.KeyMgmt;
 import android.net.wifi.WifiEnterpriseConfig;
+import android.net.wifi.WifiFeaturesUtils;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PersistableBundle;
+import android.os.Process;
 import android.telephony.CarrierConfigManager;
 import android.telephony.ImsiEncryptionInfo;
 import android.telephony.SubscriptionInfo;
@@ -35,6 +39,8 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Base64;
 import android.util.Log;
+
+import com.android.server.wifi.util.ScanResultUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -61,6 +67,19 @@ public class CarrierNetworkConfig {
     private final Map<String, NetworkInfo> mCarrierNetworkMap;
     private boolean mIsCarrierImsiEncryptionInfoAvailable = false;
     private ImsiEncryptionInfo mLastImsiEncryptionInfo = null; // used for dumpsys only
+
+
+    private static final int PRESET_EAP_CONFIG_ELEMENT_SIZE = 10;
+    private static final int PRESET_EAP_SSID_INDEX = 0;
+    private static final int PRESET_EAP_WITHSIMLOAD_INDEX = 1;
+    private static final int PRESET_EAP_METHOD_INDEX = 2;
+    private static final int PRESET_EAP_METHOD_NOSIM_INDEX = 3;
+    private static final int PRESET_EAP_IMSI_INDEX = 4;
+    private static final int PRESET_EAP_SIMSLOT_INDEX = 5;
+    private static final int PRESET_EAP_MAX_CONNECT_TIME_INDEX = 6;
+    private static final int PRESET_EAP_AUTOJOIN_MEN_INDEX = 7;
+    private static final int PRESET_EAP_MODIFY_INDEX = 8;
+    private static final int PRESET_EAP_FORGET_INDEX = 9;
 
     /**
      * Enable/disable verbose logging.
@@ -289,5 +308,143 @@ public class CarrierNetworkConfig {
         pw.println("mIsCarrierImsiEncryptionInfoAvailable="
                 + mIsCarrierImsiEncryptionInfoAvailable);
         pw.println("mLastImsiEncryptionInfo=" + mLastImsiEncryptionInfo);
+    }
+
+    public void presetWifiEapNetwork(String[] networks, WifiConfigManager wifiConfigManager, TelephonyManager telephonyManager) {
+        if (networks == null || wifiConfigManager == null || telephonyManager == null) {
+            return;
+        }
+
+        try {
+            for (String network : networks) {
+                String[] configArr = network.split(NETWORK_CONFIG_SEPARATOR);
+                if (configArr.length != PRESET_EAP_CONFIG_ELEMENT_SIZE) {
+                    Log.e(TAG, "Ignore Preset invalid config: " + network);
+                    continue;
+                }
+                boolean needSimLoad = Boolean.parseBoolean(configArr[PRESET_EAP_WITHSIMLOAD_INDEX]);
+                int maxConnectTime = Integer.parseInt(configArr[PRESET_EAP_MAX_CONNECT_TIME_INDEX]);
+                String imsi = configArr[PRESET_EAP_IMSI_INDEX];
+
+                /* if needSimload is true, imsi must be valid; if maxConnectTime > 0, imsi must be valid */
+                if ((imsi == null || imsi.isEmpty()) && (needSimLoad || maxConnectTime > 0)) {
+                    Log.e(TAG, "Ignore Preset, invalid imsi");
+                    continue;
+                }
+
+                int eapMethod = Integer.parseInt(configArr[PRESET_EAP_METHOD_INDEX]);
+                /* Now only Eap network with Eap.SIM/Eap.AKA/Eap.AKA' mehod can be preset */
+                if (WifiEnterpriseConfig.Eap.SIM != eapMethod &&
+                    WifiEnterpriseConfig.Eap.AKA != eapMethod &&
+                    WifiEnterpriseConfig.Eap.AKA_PRIME != eapMethod) {
+                    continue;
+                }
+
+                String ssid = configArr[PRESET_EAP_SSID_INDEX];
+                String configKey = ScanResultUtil.createQuotedSSID(ssid) + KeyMgmt.strings[KeyMgmt.WPA_EAP];
+                WifiConfiguration config = wifiConfigManager.getConfiguredNetwork(configKey);
+                int simSlot = Integer.parseInt(configArr[PRESET_EAP_SIMSLOT_INDEX]);
+                int slotEnabled = checkEapNetworkSlot(imsi, telephonyManager);
+
+                if (config == null) {
+                    /* if needSimload is true, phone should insert valid and right operator sim card (at least one) */
+                    if (needSimLoad && slotEnabled == -1) {
+                        continue;
+                    }
+
+                    config = new WifiConfiguration();
+                    config.SSID = ScanResultUtil.createQuotedSSID(ssid);
+                    config.allowedKeyManagement.set(KeyMgmt.WPA_EAP);
+                    config.allowedKeyManagement.set(KeyMgmt.IEEE8021X);
+                    config.enterpriseConfig = new WifiEnterpriseConfig();
+                    config.enterpriseConfig.setEapMethod(eapMethod);
+
+                    if (slotEnabled == telephonyManager.getPhoneCount() || slotEnabled == -1) {
+                        /* first preset, if insert 2 valid and right sim cards or no one valid and right sim card, should use default sim slot */
+                        config.enterpriseConfig.setSimNum(simSlot);
+                    } else {
+                        /* use current valid and right sim card slot */
+                        config.enterpriseConfig.setSimNum(slotEnabled);
+                    }
+                } else if (slotEnabled >= 0) {
+                    config.enterpriseConfig.setEapMethod(eapMethod);
+                    /* non-first preset, when only insert one valid and right sim card, use this sim slot */
+                    if (slotEnabled != telephonyManager.getPhoneCount()) {
+                        config.enterpriseConfig.setSimNum(slotEnabled);
+                    }
+                } else {
+                    eapMethod = Integer.parseInt(configArr[PRESET_EAP_METHOD_NOSIM_INDEX]);
+                    config.enterpriseConfig.setEapMethod(eapMethod);
+                }
+
+                // For compatiable to android P, if exist or not current config, set operater config again
+                config.autoJoinMenu = Boolean.parseBoolean(configArr[PRESET_EAP_AUTOJOIN_MEN_INDEX]);
+                config.canModify = Boolean.parseBoolean(configArr[PRESET_EAP_MODIFY_INDEX]);
+                config.canForget = Boolean.parseBoolean(configArr[PRESET_EAP_FORGET_INDEX]);
+                config.enterpriseConfig.setImsi(imsi);
+                config.enterpriseConfig.setMaxConnectTime(maxConnectTime);
+
+                Log.d(TAG, "addOrUpdateNetwork : " + config);
+                NetworkUpdateResult result = wifiConfigManager.addOrUpdateNetwork(config, Process.WIFI_UID);
+                if (!result.isSuccess()) {
+                    Log.e(TAG, "Failed to add preset network: " + config);
+                } else if (!wifiConfigManager.enableNetwork(result.getNetworkId(), false, Process.WIFI_UID)) {
+                    Log.e(TAG, "Failed to enable preset network: " + config);
+                }
+            }
+        } catch (NumberFormatException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * check current sim card valid and right
+     * @param configImsi current operator imsi value
+     * @param telephonyManager telephonyManager, to check sim card
+     * @return if 2 sim cards are both valid and right, will return 2
+     *         if only one sim card is valid and right, will return valid sim slot index
+     *         if no sim card is inserted or not match operator sim card, will return -1
+     */
+    public int checkEapNetworkSlot(String configImsi, TelephonyManager telephonyManager) {
+        int count = 0;
+        int slotEnabledIndex = -1;
+        int phoneCount = telephonyManager.getPhoneCount();
+        for (int i = 0; i < phoneCount ; i++) {
+            if (isSimSlotEnabledForEapNetwork(i, configImsi, telephonyManager)) {
+                count++;
+                slotEnabledIndex = i;
+            }
+        }
+        Log.d(TAG, "Check Eap Network slot count : " + count + ", slotEnabledIndex = " + slotEnabledIndex);
+        /* if insert 2 sim cards with valid and match operator imsi, return count, otherwise, return valid sim slot index */
+        return count == phoneCount ? count : slotEnabledIndex;
+    }
+
+    /**
+     * check current sim slot valid and right
+     * @param slot current sim slot index value
+     * @param configImsi operator imsi value
+     * @param telephonyManager telephonyManager, to check sim card
+     * @return if operaotr imsi is not set, when this sim slot is valid, will return true (it's valid)
+     *         if current sim slot imsi is valid and match operator imsi, will return true, otherwise return false
+     */
+    private boolean isSimSlotEnabledForEapNetwork(int slot, String configImsi, TelephonyManager telephonyManager) {
+        /* current sim slot with sim card */
+        if (telephonyManager.hasIccCard(slot)) {
+            /* operator imsi is not set, no need to check sim card imsi */
+            if (configImsi == null || configImsi.isEmpty()) {
+                return true;
+            }
+            int[] subId = SubscriptionManager.getSubId(slot);
+            String imsi = telephonyManager.getSubscriberId(subId == null ? -1 : subId[0]);
+            if (imsi == null || imsi.isEmpty()) {
+                return false;
+            }
+            String imsiList[] = configImsi.split("-");
+            for (String str : imsiList) {
+                if (imsi.startsWith(str)) return true;
+            }
+        }
+        return false;
     }
 }

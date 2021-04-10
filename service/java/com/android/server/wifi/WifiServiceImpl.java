@@ -38,6 +38,7 @@ import static com.android.server.wifi.WifiController.CMD_EMERGENCY_MODE_CHANGED;
 import static com.android.server.wifi.WifiController.CMD_SCAN_ALWAYS_MODE_CHANGED;
 import static com.android.server.wifi.WifiController.CMD_SET_AP;
 import static com.android.server.wifi.WifiController.CMD_WIFI_TOGGLED;
+import static com.android.server.wifi.WifiController.CMD_RESTART_AP;
 
 import android.Manifest;
 import android.annotation.CheckResult;
@@ -66,9 +67,12 @@ import android.net.wifi.INetworkRequestMatchCallback;
 import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ITrafficStateCallback;
+import android.net.wifi.IWifiNetworkEventObserver;
+import android.net.wifi.IWifiRssiLinkSpeedAndFrequencyObserver;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiActivityEnergyInfo;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiFeaturesUtils;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.DeviceMobilityState;
@@ -184,6 +188,7 @@ public class WifiServiceImpl extends BaseWifiService {
     private final WifiMetrics mWifiMetrics;
 
     private final WifiInjector mWifiInjector;
+    private final WifiFeaturesUtils mWifiFeaturesUtils;
     /* Backup/Restore Module */
     private final WifiBackupRestore mWifiBackupRestore;
     private final WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
@@ -323,6 +328,8 @@ public class WifiServiceImpl extends BaseWifiService {
                         mClientModeImpl.sendMessage(Message.obtain(msg));
                     }
                     break;
+                case WifiManager.SOFTAP_START_WPS:
+                case WifiManager.SOFTAP_CANCEL_WPS:
                 case WifiManager.DISABLE_NETWORK:
                     if (checkPrivilegedPermissionsAndReplyIfNotAuthorized(
                             msg, WifiManager.DISABLE_NETWORK_FAILED)) {
@@ -489,6 +496,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mPowerProfile = mWifiInjector.getPowerProfile();
         mWifiNetworkSuggestionsManager = mWifiInjector.getWifiNetworkSuggestionsManager();
         mDppManager = mWifiInjector.getDppManager();
+        mWifiFeaturesUtils = WifiFeaturesUtils.getInstance(mContext);
     }
 
     /**
@@ -541,12 +549,15 @@ public class WifiServiceImpl extends BaseWifiService {
                     @Override
                     public void onReceive(Context context, Intent intent) {
                         String state = intent.getStringExtra(IccCardConstants.INTENT_KEY_ICC_STATE);
+                        int phoneId = intent.getIntExtra(PhoneConstants.PHONE_KEY, 0);
+                        Log.d(TAG, "resetting networks because SIM changed, phoneId = "
+                            + phoneId + ", state = " + state);
                         if (IccCardConstants.INTENT_VALUE_ICC_ABSENT.equals(state)) {
-                            Log.d(TAG, "resetting networks because SIM was removed");
-                            mClientModeImpl.resetSimAuthNetworks(false);
+                            //mClientModeImpl.resetSimAuthNetworks(false);
+                            mClientModeImpl.resetSimAuthNetworks(false, phoneId);
                         } else if (IccCardConstants.INTENT_VALUE_ICC_LOADED.equals(state)) {
-                            Log.d(TAG, "resetting networks because SIM was loaded");
-                            mClientModeImpl.resetSimAuthNetworks(true);
+                            //mClientModeImpl.resetSimAuthNetworks(true);
+                            mClientModeImpl.resetSimAuthNetworks(true, phoneId);
                         }
                     }
                 },
@@ -873,6 +884,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (enforceChangePermission(packageName) != MODE_ALLOWED) {
             return false;
         }
+        if (!mWifiFeaturesUtils.isSupportWifiFeature()) return false;
         boolean isPrivileged = isPrivileged(Binder.getCallingPid(), Binder.getCallingUid());
         if (!isPrivileged
                 && !mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)) {
@@ -974,6 +986,12 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     private void updateInterfaceIpStateInternal(String ifaceName, int mode) {
+        if (mWifiApState != WifiManager.WIFI_AP_STATE_ENABLED &&
+            ifaceName != null &&
+            mode == WifiManager.IFACE_IP_MODE_TETHERED) {
+            Slog.d(TAG, "ignore this TetherInterface IP state");
+            return;
+        }
         // update interface IP state related to tethering and hotspot
         synchronized (mLocalOnlyHotspotRequests) {
             // update the mode tracker here - we clear out state below
@@ -1045,6 +1063,7 @@ public class WifiServiceImpl extends BaseWifiService {
     public boolean startSoftAp(WifiConfiguration wifiConfig) {
         // NETWORK_STACK is a signature only permission.
         enforceNetworkStackPermission();
+        if (!mWifiFeaturesUtils.isSupportWifiFeature()) return false;
 
         mLog.info("startSoftAp uid=%").c(Binder.getCallingUid()).flush();
 
@@ -1292,7 +1311,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 }
                 // also clear interface ip state - send null for now since we don't know what
                 // interface (and we only have one anyway)
-                updateInterfaceIpState(null, WifiManager.IFACE_IP_MODE_UNSPECIFIED);
+                updateInterfaceIpStateInternal(null, WifiManager.IFACE_IP_MODE_UNSPECIFIED);
             }
             return;
         }
@@ -1557,6 +1576,154 @@ public class WifiServiceImpl extends BaseWifiService {
         throw new UnsupportedOperationException("LocalOnlyHotspot is still in development");
     }
 
+    //NOTE: Add for softap support wps connect mode and hidden ssid Feature BEG-->
+    /**
+    * SoftAp check wps pin
+    *
+    * @return true if the wps pin is well-formed
+    */
+    public boolean softApWpsCheckPin(String wpsPin, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        return mClientModeImpl.syncSoftApWpsCheckPin(wpsPin);
+    }
+    //<-- Add for softap support wps connect mode and hidden ssid Feature END
+
+    public boolean softApBlockStation(String mac, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        if (getWifiApEnabledState() == WifiManager.WIFI_AP_STATE_ENABLED) {
+            return mClientModeImpl.syncSoftApBlockStation(mac);
+        }
+        return true;
+    }
+
+    //To ublock the statition
+    public boolean softApUnblockStation(String mac, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        if (getWifiApEnabledState() == WifiManager.WIFI_AP_STATE_ENABLED) {
+            return mClientModeImpl.syncSoftApUnblockStation(mac);
+        }
+        return true;
+    }
+
+    /**
+    * Get the detail info of the connected client
+    * return:
+    *      return the detail info list.
+    *      Format of each string info:
+    *      MAC IP DEV_NAME
+    * such as:
+    *      00:08:22:0e:2d:fc 192.168.43.37 android-9dfb76a944bd077a
+    */
+    public List<String> softApGetConnectedStationsDetail(String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return new ArrayList<String>();
+        }
+        return mClientModeImpl.syncSoftApGetConnectedStationsDetail();
+    }
+
+    /**
+    * Get the detail info of the blocked client
+    * return:
+    *      return the detail info list.
+    *      Format of each string info:
+    *      MAC IP DEV_NAME
+    * such as:
+    *      00:08:22:0e:2d:fc 192.168.43.37 android-9dfb76a944bd077a
+    */
+    public List<String> softApGetBlockedStationsDetail(String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return new ArrayList<String>();
+        }
+        if (getWifiApEnabledState() == WifiManager.WIFI_AP_STATE_ENABLED) {
+            return mClientModeImpl.syncSoftApGetBlockedStationsDetail();
+        }
+        return new ArrayList<String>();
+    }
+
+    /**
+    * add the client to white list
+    * in: mac
+    *      contain the mac that want to add to white list. Format: xx:xx:xx:xx:xx:xx
+    * in: name
+    *      the name of the client, may be null
+    * in softapStarted
+    *      tell if the softap has started or not
+    * return:
+    *      return true for success.
+    */
+    public boolean softApAddClientToWhiteList(String mac, String name, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        return mClientModeImpl.syncSoftApAddClientToWhiteList(mac, name);
+    }
+
+    /**
+    * remove the client from white list
+    * in: mac
+    *      contain the mac that want to remove from white list. Format: xx:xx:xx:xx:xx:xx
+    * in: name
+    *      the name of the client, may be null
+    * in softapStarted
+    *      tell if the softap has started or not
+    * return:
+    *      return true for success.
+    */
+    public boolean softApDelClientFromWhiteList(String mac, String name, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        return mClientModeImpl.syncSoftApDelClientFromWhiteList(mac, name);
+    }
+
+    /**
+    * To enable the white list or not
+    * in enabled
+    *      true: enable white list
+    *      false: disable white list
+    */
+    public boolean softApSetClientWhiteListEnabled(boolean enabled, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        return mClientModeImpl.syncSoftApSetClientWhiteListEnabled(enabled);
+    }
+
+    /**
+    * Get the detail info of the white client list
+    * return:
+    *      return the detail info list.
+    *      Format of each string info:
+    *      MAC DEV_NAME
+    * such as:
+    *      00:08:22:0e:2d:fc android-9dfb76a944bd077a
+    */
+    public List<String> softApGetClientWhiteList(String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return new ArrayList<String>();
+        }
+        return mClientModeImpl.syncSoftApGetClientWhiteList();
+    }
+
+    /**
+    * Check if White list is enabled or not
+    * return:
+    *      true: white list is enabled, that is in white list mode
+    *      false: disabled
+    */
+    public boolean softApIsWhiteListEnabled(String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        return mClientModeImpl.syncSoftApIsWhiteListEnabled();
+    }
+
     /**
      * see {@link WifiManager#getWifiApConfiguration()}
      * @return soft access point configuration
@@ -1612,6 +1779,10 @@ public class WifiServiceImpl extends BaseWifiService {
         if (WifiApConfigStore.validateApWifiConfiguration(wifiConfig)) {
             mClientModeImplHandler.post(() -> {
                 mWifiApConfigStore.setApConfiguration(wifiConfig);
+                if (WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_SOFTAP_FEATURES &&
+                        getWifiApEnabledState() == WifiManager.WIFI_AP_STATE_ENABLED) {
+                    mWifiController.sendMessage(CMD_RESTART_AP);
+                }
             });
             return true;
         } else {
@@ -2381,6 +2552,11 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("setCountryCode uid=%").c(Binder.getCallingUid()).flush();
         final long token = Binder.clearCallingIdentity();
         mCountryCode.setCountryCode(countryCode);
+        /* SPRD:Add for Bug744132 set saved countrycode @{ */
+        if (!TextUtils.isEmpty(countryCode)) {
+            Settings.Global.putString(mContext.getContentResolver(),
+                Settings.Global.WIFI_COUNTRY_CODE, countryCode);
+        }
         Binder.restoreCallingIdentity(token);
     }
 
@@ -2397,6 +2573,11 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("getCountryCode uid=%").c(Binder.getCallingUid()).flush();
         }
         String country = mCountryCode.getCountryCode();
+        // UNISOC: Try to get saved countrycode if current country code empty
+        if (TextUtils.isEmpty(country)) {
+            country = Settings.Global.getString(mContext.getContentResolver(),
+                Settings.Global.WIFI_COUNTRY_CODE);
+        }
         return country;
     }
 
@@ -3550,4 +3731,63 @@ public class WifiServiceImpl extends BaseWifiService {
                 () -> mClientModeImpl.updateWifiUsabilityScore(seqNum, score,
                         predictionHorizonSec));
     }
+
+    //SPRD: Add for Wifi Network Event Observer -->
+    public boolean registerWifiNetworkEventObserver(IWifiNetworkEventObserver observer) {
+        enforceAccessPermission();
+        mLog.info("registerWifiNetworkEventObserver uid=%").c(Binder.getCallingUid()).flush();
+        return mClientModeImpl.registerWifiNetworkEventObserver(observer);
+    }
+
+    public boolean unregisterWifiNetworkEventObserver(IWifiNetworkEventObserver observer) {
+        enforceAccessPermission();
+        mLog.info("unregisterWifiNetworkEventObserver uid=%").c(Binder.getCallingUid()).flush();
+        return mClientModeImpl.unregisterWifiNetworkEventObserver(observer);
+    }
+
+    public int getCurrentRssi() {
+        enforceAccessPermission();
+        mLog.info("getCurrentRssi uid=%").c(Binder.getCallingUid()).flush();
+        if (mClientModeImplChannel != null) {
+            return mClientModeImpl.syncGetCurrentRssi(mClientModeImplChannel);
+        } else {
+            Log.e(TAG, "mClientModeImplChannel is not initialized");
+            return WifiInfo.INVALID_RSSI;
+        }
+    }
+
+    public boolean isNetworkValidForVoWifi() {
+        enforceAccessPermission();
+        mLog.info("isNetworkValidForVoWifi uid=%").c(Binder.getCallingUid()).flush();
+        return mClientModeImpl.isNetworkValidForVoWifi();
+    }
+
+    public boolean setCheckingInternetForVoWifi(boolean enabled) {
+        enforceAccessPermission();
+        mLog.info("setCheckingInternetForVoWifi uid=%").c(Binder.getCallingUid()).flush();
+        return mClientModeImpl.setCheckingInternetForVoWifi(enabled);
+    }
+
+    //SPRD:Bug #692535 Add for vowifi,Delay closing WiFi BGN -->
+    public void notifyAndCloseWifi() {
+        enforceAccessPermission();
+        mLog.info("notifyAndCloseWifi uid=%").c(Binder.getCallingUid()).flush();
+        mWifiInjector.getVoWifiAssistor().notifyAndCloseWifi();
+    }
+    //<-- Add for vowifi,Delay closing WiFi END
+    //<-- Add for Wifi Network Event Observer
+
+    //<-- Add for Wifi Rssi LinkSpeed And Frequency Observer BGN
+    public boolean registerWifiRssiLinkSpeedAndFrequencyObserver(IWifiRssiLinkSpeedAndFrequencyObserver observer) {
+        enforceAccessPermission();
+        mLog.info("registerWifiNetworkEventObserver uid=%").c(Binder.getCallingUid()).flush();
+        return mClientModeImpl.registerWifiRssiLinkSpeedAndFrequencyObserver(observer);
+    }
+
+    public boolean unregisterWifiRssiLinkSpeedAndFrequencyObserver(IWifiRssiLinkSpeedAndFrequencyObserver observer) {
+        enforceAccessPermission();
+        mLog.info("unregisterWifiNetworkEventObserver uid=%").c(Binder.getCallingUid()).flush();
+        return mClientModeImpl.unregisterWifiRssiLinkSpeedAndFrequencyObserver(observer);
+    }
+    //<-- Add WiFi Rssi LinkSpeed And Frequency Observer END
 }

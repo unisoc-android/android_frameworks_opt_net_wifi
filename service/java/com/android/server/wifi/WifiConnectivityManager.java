@@ -28,6 +28,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiFeaturesUtils;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiScanner;
@@ -43,6 +44,7 @@ import android.util.Log;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.ScanResultUtil;
+import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -205,6 +207,9 @@ public class WifiConnectivityManager {
     @VisibleForTesting
     public static final int REASON_CODE_AP_UNABLE_TO_HANDLE_NEW_STA = 17;
 
+    private final WifiFeaturesUtils mWifiFeaturesUtils;
+    private boolean mSupportAppConnectPolicy = false;
+
     // A helper to log debugging information in the local log buffer, which can
     // be retrieved in bugreport.
     private void localLog(String log) {
@@ -262,6 +267,19 @@ public class WifiConnectivityManager {
      *         false - if no candidate is selected by WifiNetworkSelector
      */
     private boolean handleScanResults(List<ScanDetail> scanDetails, String listenerName) {
+        //NOTE: Support wifi-p2p do not coexist BEG-->
+        if (!WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_WIFI_COEXIST_P2P
+            && WifiP2pServiceImpl.mP2pConnectingOrConnected) {
+            Log.i(TAG, "Do not auto connect when wifi and p2p should not coexsit");
+            return false;
+        }
+        //<-- Support wifi-p2p do not coexist END
+
+        if (mSupportAppConnectPolicy && mWifiFeaturesUtils.isAutoConnect() == false) {
+            Log.i(TAG, "WifiFeaturesUtils isAutoConnect false,  " + mWifiFeaturesUtils.isAutoConnect());
+            return false;
+        }
+
         // Check if any blacklisted BSSIDs can be freed.
         refreshBssidBlacklist();
 
@@ -617,6 +635,10 @@ public class WifiConnectivityManager {
                 R.integer.config_wifi_framework_5GHz_preference_boost_factor);
         mCurrentConnectionBonus = context.getResources().getInteger(
                 R.integer.config_wifi_framework_current_network_boost);
+
+        mWifiFeaturesUtils = WifiFeaturesUtils.getInstance(context);
+        mSupportAppConnectPolicy = mWifiFeaturesUtils.isSupportAppConnectPolicy();
+
         mSameNetworkBonus = context.getResources().getInteger(
                 R.integer.config_wifi_framework_SAME_BSSID_AWARD);
         mSecureBonus = context.getResources().getInteger(
@@ -1468,6 +1490,10 @@ public class WifiConnectivityManager {
         if (mRunning) return;
         retrieveWifiScanner();
         mConnectivityHelper.getFirmwareRoamingInfo();
+        if (!WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_WIFI_AUTO_ROAM
+                && mConnectivityHelper.isFirmwareRoamingSupported()) {
+            mConnectivityHelper.enableFirmwareRoaming();
+        }
         clearBssidBlacklist();
         mRunning = true;
     }
@@ -1545,4 +1571,5 @@ public class WifiConnectivityManager {
         mCarrierNetworkNotifier.dump(fd, pw, args);
         mCarrierNetworkConfig.dump(fd, pw, args);
     }
+
 }

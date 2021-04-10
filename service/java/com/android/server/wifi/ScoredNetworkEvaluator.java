@@ -159,6 +159,12 @@ public class ScoredNetworkEvaluator implements WifiNetworkSelector.NetworkEvalua
                 continue;
             }
 
+            // Ignore non-autoJoin networks
+            if (!configuredNetwork.autoJoin) {
+                debugLog("Ignoring not autoJoin SSID: " + configuredNetwork.SSID);
+                continue;
+            }
+
             // Ignore trusted and non-externally scored networks
             if (configuredNetwork.trusted && !configuredNetwork.useExternalScores) {
                 continue;

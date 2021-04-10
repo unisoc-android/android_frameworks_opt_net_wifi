@@ -42,6 +42,8 @@ import com.android.server.wifi.util.ScanResultUtil;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -216,6 +218,13 @@ public class WifiNetworkSelector {
     // be retrieved in bugreport.
     private void localLog(String log) {
         mLocalLog.log(log);
+    }
+
+    /**
+     * Dump the local log buffer of WifiNetworkSelector.
+     */
+    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+        mLocalLog.dump(fd, pw, args);
     }
 
     private boolean isCurrentNetworkSufficient(WifiInfo wifiInfo, List<ScanDetail> scanDetails) {

@@ -53,6 +53,7 @@ import android.util.Pair;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -62,6 +63,9 @@ import org.xmlpull.v1.XmlPullParserException;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.math.BigInteger;
+import java.net.URLEncoder;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -338,6 +342,14 @@ public class WifiConfigManager {
      * Flag to indicate if the user unlock was deferred until the store load occurs.
      */
     private boolean mDeferredUserUnlockRead = false;
+    /**
+     * Flag to indicate if SIM1 is present.
+     */
+    private boolean mSim1Present = false;
+    /**
+     * Flag to indicate if SIM2 is present.
+     */
+    private boolean mSim2Present = false;
     /**
      * This is keeping track of the next network ID to be assigned. Any new networks will be
      * assigned |mNextNetworkId| as network ID.
@@ -869,6 +881,10 @@ public class WifiConfigManager {
         if (externalConfig.BSSID != null) {
             internalConfig.BSSID = externalConfig.BSSID.toLowerCase();
         }
+        internalConfig.autoJoin = externalConfig.autoJoin;
+        internalConfig.autoJoinMenu = externalConfig.autoJoinMenu;
+        internalConfig.canModify = externalConfig.canModify;
+        internalConfig.canForget = externalConfig.canForget;
         internalConfig.hiddenSSID = externalConfig.hiddenSSID;
         internalConfig.requirePMF = externalConfig.requirePMF;
 
@@ -916,6 +932,13 @@ public class WifiConfigManager {
                 && !externalConfig.allowedKeyManagement.isEmpty()) {
             internalConfig.allowedKeyManagement =
                     (BitSet) externalConfig.allowedKeyManagement.clone();
+            if (externalConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_PSK)) {
+                internalConfig.wapiPskType = externalConfig.wapiPskType;
+            }
+            if (externalConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_CERT)) {
+                internalConfig.wapiAsCert = externalConfig.wapiAsCert;
+                internalConfig.wapiUserCert = externalConfig.wapiUserCert;
+            }
         }
         if (externalConfig.allowedPairwiseCiphers != null
                 && !externalConfig.allowedPairwiseCiphers.isEmpty()) {
@@ -1939,7 +1962,7 @@ public class WifiConfigManager {
      */
     public boolean setNetworkCandidateScanResult(int networkId, ScanResult scanResult, int score) {
         if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "Set network candidate scan result " + scanResult + " for " + networkId);
+            Log.d(TAG, "Set network candidate scan result " + scanResult + " for " + networkId + " score:" + score);
         }
         WifiConfiguration config = getInternalConfiguredNetwork(networkId);
         if (config == null) {
@@ -2016,7 +2039,7 @@ public class WifiConfigManager {
     public boolean setNetworkConnectChoice(
             int networkId, String connectChoiceConfigKey, long timestamp) {
         if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "Set network connect choice " + connectChoiceConfigKey + " for " + networkId);
+            Log.d(TAG, "Set network connect choice " + connectChoiceConfigKey + " for " + networkId);
         }
         WifiConfiguration config = getInternalConfiguredNetwork(networkId);
         if (config == null) {
@@ -2692,13 +2715,32 @@ public class WifiConfigManager {
     public List<WifiScanner.ScanSettings.HiddenNetwork> retrieveHiddenNetworkList() {
         List<WifiScanner.ScanSettings.HiddenNetwork> hiddenList = new ArrayList<>();
         List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
+        List<WifiConfiguration> gbkNetworks = new ArrayList<>();
         // Remove any permanently disabled networks or non hidden networks.
         Iterator<WifiConfiguration> iter = networks.iterator();
         while (iter.hasNext()) {
             WifiConfiguration config = iter.next();
             if (!config.hiddenSSID) {
                 iter.remove();
+            } else {
+                try {
+                    String ssid = NativeUtil.removeEnclosingQuotes(config.SSID);
+                    String utfSsid = URLEncoder.encode(ssid, "UTF-8");
+                    String gbkSsid = URLEncoder.encode(ssid, "GBK");
+                    if (!utfSsid.equals(gbkSsid)) {
+                        //Add a gbkNetwork with hex ssid for scan hidden network list if ssid changed after utf8 encode.
+                        WifiConfiguration gbkNetwork = new WifiConfiguration(config);
+                        gbkNetwork.SSID = String.format("%x", new BigInteger(1, ssid.getBytes(Charset.forName("GBK"))));
+                        gbkNetworks.add(gbkNetwork);
+                        Log.i(TAG, "ssid = " + ssid + "gbkNetwork.SSID = " + gbkNetwork.SSID);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "config.SSID = " + config.SSID + ", GBK encode e: " + e);
+                }
             }
+        }
+        for (WifiConfiguration config : gbkNetworks) {
+            networks.add(config);
         }
         Collections.sort(networks, sScanListComparator);
         // The most frequently connected network has the highest priority now.
@@ -2812,6 +2854,65 @@ public class WifiConfigManager {
                 }
             }
         }
+    }
+
+    /**
+     * Resets all sim networks state.
+     */
+    public void resetSimNetworks(boolean simPresent, int phoneId) {
+        if (mVerboseLoggingEnabled) localLog("resetSimNetworks");
+        if (phoneId == 0) mSim1Present = simPresent;
+        if (phoneId == 1) mSim2Present = simPresent;
+        if (simPresent) return;
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+            // Do not need update if the config is not with sim config or not with the removed sim.
+            if (!TelephonyUtil.isSimConfig(config) || phoneId != config.enterpriseConfig.getSimNum()) {
+                continue;
+            }
+            if (config.enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.PEAP) {
+                Pair<String, String> currentIdentity = TelephonyUtil.getSimIdentity(
+                        mTelephonyManager, new TelephonyUtil(), config,
+                        mWifiInjector.getCarrierNetworkConfig());
+                if (mVerboseLoggingEnabled) {
+                    Log.d(TAG, "New identity for config " + config + ": " + currentIdentity);
+                }
+                // Update the loaded config
+                if (currentIdentity == null) {
+                    Log.d(TAG, "Identity is null");
+                } else {
+                    config.enterpriseConfig.setIdentity(currentIdentity.first);
+                }
+                // do not reset anonymous identity since it may be dependent on user-entry
+                // (i.e. cannot re-request on every reboot/SIM re-entry)
+            } else {
+                // reset identity as well: supplicant will ask us for it
+                config.enterpriseConfig.setIdentity("");
+                config.enterpriseConfig.setAnonymousIdentity("");
+            }
+        }
+    }
+
+    /**
+     * Check if SIM is present.
+     *
+     * @return True if SIM is present, otherwise false.
+     */
+    public boolean isSimPresent() {
+        return mSim1Present || mSim2Present;
+    }
+
+    /**
+     * Check if SIM int the phoneId is present.
+     *
+     * @return True if SIM0 is present, otherwise false.
+     */
+    public boolean isSimPresent(int phoneId) {
+        if (phoneId == 0) {
+            return mSim1Present;
+        } else if (phoneId == 1) {
+            return mSim2Present;
+        }
+        return false;
     }
 
     /**

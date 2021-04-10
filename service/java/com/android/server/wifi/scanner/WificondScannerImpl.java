@@ -370,10 +370,12 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
         synchronized (mSettingsLock) {
             if (mLastScanSettings == null) {
                  // got a scan before we started scanning or after scan was canceled
+                if (DBG) Log.d(TAG, "mLastScanSettings is null ");
                 return;
             }
 
             mNativeScanResults = mWifiNative.getScanResults(mIfaceName);
+            if (DBG) Log.d(TAG, "Polling scan data for scan, results size:" + mNativeScanResults.size());
             List<ScanResult> singleScanResults = new ArrayList<>();
             int numFilteredScanResults = 0;
             for (int i = 0; i < mNativeScanResults.size(); ++i) {
@@ -386,6 +388,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                     }
                 } else {
                     numFilteredScanResults++;
+                    Log.d(TAG, "Filtering out " + result.SSID+" timestamp = " + result.timestamp);
                 }
             }
             if (numFilteredScanResults != 0) {

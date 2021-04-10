@@ -75,14 +75,14 @@ public class SelfRecovery {
             Log.e(TAG, "Invalid trigger reason. Ignoring...");
             return;
         }
-        if (reason == REASON_STA_IFACE_DOWN) {
+        /*if (reason == REASON_STA_IFACE_DOWN) {
             Log.e(TAG, "STA interface down, disable wifi");
             mWifiController.sendMessage(WifiController.CMD_RECOVERY_DISABLE_WIFI);
             return;
-        }
+        }*/
 
         Log.e(TAG, "Triggering recovery for reason: " + REASON_STRINGS[reason]);
-        if (reason == REASON_WIFINATIVE_FAILURE) {
+        /*if (reason == REASON_WIFINATIVE_FAILURE) {
             trimPastRestartTimes();
             // Ensure there haven't been too many restarts within MAX_RESTARTS_TIME_WINDOW
             if (mPastRestartTimes.size() >= MAX_RESTARTS_IN_TIME_WINDOW) {
@@ -92,7 +92,7 @@ public class SelfRecovery {
                 return;
             }
             mPastRestartTimes.add(mClock.getElapsedSinceBootMillis());
-        }
+        }*/
         mWifiController.sendMessage(WifiController.CMD_RECOVERY_RESTART_WIFI, reason);
     }
 

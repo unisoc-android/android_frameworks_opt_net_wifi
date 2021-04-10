@@ -4,6 +4,7 @@ import static com.android.server.wifi.hotspot2.anqp.Constants.BYTES_IN_EUI48;
 import static com.android.server.wifi.hotspot2.anqp.Constants.BYTE_MASK;
 
 import android.net.wifi.ScanResult;
+import android.net.wifi.WifiSsid;
 import android.util.Log;
 
 import com.android.server.wifi.hotspot2.anqp.ANQPElement;
@@ -220,17 +221,18 @@ public class NetworkDetail {
             try {
                 CharBuffer decoded = decoder.decode(ByteBuffer.wrap(ssidOctets));
                 ssid = decoded.toString();
-            }
-            catch (CharacterCodingException cce) {
+            } catch (CharacterCodingException cce) {
                 ssid = null;
             }
-
             if (ssid == null) {
                 if (extendedCapabilities.isStrictUtf8() && exception != null) {
                     throw new IllegalArgumentException("Failed to decode SSID in dubious IE string");
                 }
                 else {
-                    ssid = new String(ssidOctets, StandardCharsets.ISO_8859_1);
+                    ssid = WifiSsid.createFromByteArray(ssidOctets).toString();
+                    if (WifiSsid.NONE.equals(ssid)) {
+                        ssid = new String(ssidOctets, StandardCharsets.ISO_8859_1);
+                    }
                 }
             }
             isHiddenSsid = true;

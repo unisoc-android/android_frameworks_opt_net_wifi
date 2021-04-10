@@ -508,7 +508,7 @@ public class WificondControl implements IBinder.DeathRecipient {
         int[] resultArray;
         try {
             resultArray = iface.signalPoll();
-            if (resultArray == null || resultArray.length != 4) {
+            if (resultArray == null || resultArray.length != 5) {
                 Log.e(TAG, "Invalid signal poll result from wificond");
                 return null;
             }
@@ -521,6 +521,7 @@ public class WificondControl implements IBinder.DeathRecipient {
         pollResult.txBitrate = resultArray[1];
         pollResult.associationFrequency = resultArray[2];
         pollResult.rxBitrate = resultArray[3];
+        pollResult.noise = resultArray[4];
         return pollResult;
     }
 
@@ -567,6 +568,7 @@ public class WificondControl implements IBinder.DeathRecipient {
     */
     public ArrayList<ScanDetail> getScanResults(@NonNull String ifaceName, int scanType) {
         ArrayList<ScanDetail> results = new ArrayList<>();
+        ArrayList<WifiSsid> gbkWifiSsids = new ArrayList<>();
         IWifiScannerImpl scannerImpl = getScannerImpl(ifaceName);
         if (scannerImpl == null) {
             Log.e(TAG, "No valid wificond scanner interface handler");
@@ -631,6 +633,9 @@ public class WificondControl implements IBinder.DeathRecipient {
                         idx++;
                     }
                 }
+                if (wifiSsid.isGbkEncoder()) {
+                    gbkWifiSsids.add(wifiSsid);
+                }
                 results.add(scanDetail);
             }
         } catch (RemoteException e1) {
@@ -640,7 +645,29 @@ public class WificondControl implements IBinder.DeathRecipient {
             Log.d(TAG, "get " + results.size() + " scan results from wificond");
         }
 
+        synchronized (mLock) {
+            // Update mGbkSsids when getScanResults
+            // mGbkSsids: the key is ssid string, and the value is hex string.
+            // WifiSsid getHexString() contain "0x", should remove the flag.
+            mGbkSsids.clear();
+            for (WifiSsid gbkWifiSsid : gbkWifiSsids) {
+                String gbkStr = gbkWifiSsid.toString();
+                String hexStr = gbkWifiSsid.getHexString();
+                if (gbkStr != null && hexStr != null) {
+                    mGbkSsids.put(gbkStr, hexStr.substring(2));
+                }
+                Log.i(TAG, "gbkStr = " + gbkStr + ", hexStr = " + hexStr);
+            }
+        }
         return results;
+    }
+
+    private final static Object mLock = new Object();
+    private static HashMap<String, String> mGbkSsids = new HashMap<>();
+    public static HashMap<String, String> getGbkWifiSsids() {
+        synchronized (mLock) {
+            return new HashMap<String, String>(mGbkSsids);
+        }
     }
 
     /**

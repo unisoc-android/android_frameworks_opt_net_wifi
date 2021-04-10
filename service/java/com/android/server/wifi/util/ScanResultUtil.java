@@ -147,6 +147,11 @@ public class ScanResultUtil {
      */
     public static void setAllowedKeyManagementFromScanResult(ScanResult scanResult,
             WifiConfiguration config) {
+        if (isScanResultForWapiPskNetwork(scanResult)) {
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WAPI_PSK);
+        } else if (isScanResultForWapiCertNetwork(scanResult)) {
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WAPI_CERT);
+        } else
         if (isScanResultForSaeNetwork(scanResult)) {
             config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_SAE);
         } else if (isScanResultForPskNetwork(scanResult)) {
@@ -204,5 +209,21 @@ public class ScanResultUtil {
                         r.capabilities);
             }
         }
+    }
+
+    /**
+     * Helper method to check if the provided |scanResult| corresponds to a WAPI-PSK network or not.
+     * This checks if the provided capabilities string contains WAPI-PSK encryption type or not.
+     */
+    public static boolean isScanResultForWapiPskNetwork(ScanResult scanResult) {
+        return scanResult.capabilities.contains("WAPI-PSK");
+    }
+
+    /**
+     * Helper method to check if the provided |scanResult| corresponds to a WAPI-PSK network or not.
+     * This checks if the provided capabilities string contains WAPI-PSK encryption type or not.
+     */
+    public static boolean isScanResultForWapiCertNetwork(ScanResult scanResult) {
+        return scanResult.capabilities.contains("WAPI-CERT");
     }
 }

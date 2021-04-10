@@ -239,6 +239,13 @@ public class SupplicantStateTracker extends StateMachine {
         public boolean processMessage(Message message) {
             if (DBG) Log.d(TAG, getName() + message.toString() + "\n");
             switch (message.what) {
+                //SPRD: Bug #474464 Porting WAPI feature BEG-->
+                case WifiMonitor.WAPI_AUTHENTICATION_FAILURE_EVENT:
+                    mAuthFailureInSupplicantBroadcast = true;
+                    mAuthFailureReason = WifiManager.ERROR_AUTH_FAILURE_NONE;
+                    //mWifiConfigManager.updateNetworkSelectionStatus(netId, disableReason);
+                    break;
+                //<-- Porting WAPI feature END
                 case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
                     mAuthFailureInSupplicantBroadcast = true;
                     mAuthFailureReason = message.arg1;

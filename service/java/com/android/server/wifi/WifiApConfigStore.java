@@ -25,6 +25,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiFeaturesUtils;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
 import android.os.Environment;
 import android.os.Handler;
@@ -286,6 +287,13 @@ public class WifiApConfigStore {
                 config.hiddenSSID = in.readBoolean();
             }
 
+            config.softApMaxNumSta = in.readInt();
+            config.macAddrAcl = in.readInt();
+
+            // Sprd Softap group rekeying intervals, not used on Q
+            if (version == 2) {
+                int groupReKeyInterval = in.readInt();
+            }
             int authType = in.readInt();
             config.allowedKeyManagement.set(authType);
             if (authType != KeyMgmt.NONE) {
@@ -318,6 +326,8 @@ public class WifiApConfigStore {
             out.writeInt(config.apBand);
             out.writeInt(config.apChannel);
             out.writeBoolean(config.hiddenSSID);
+            out.writeInt(config.softApMaxNumSta);
+            out.writeInt(config.macAddrAcl);
             int authType = config.getAuthType();
             out.writeInt(authType);
             if (authType != KeyMgmt.NONE) {
@@ -337,8 +347,13 @@ public class WifiApConfigStore {
     private WifiConfiguration getDefaultApConfiguration() {
         WifiConfiguration config = new WifiConfiguration();
         config.apBand = WifiConfiguration.AP_BAND_2GHZ;
-        config.SSID = mContext.getResources().getString(
+        String ssid = WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_SOFTAP_CUSTOMIZED_NAME;
+        if (ssid != null && ssid.isEmpty()) {
+            config.SSID = mContext.getResources().getString(
                 R.string.wifi_tether_configure_ssid_default) + "_" + getRandomIntForDefaultSsid();
+        } else {
+            config.SSID = ssid;
+        }
         config.allowedKeyManagement.set(KeyMgmt.WPA2_PSK);
         String randomUUID = UUID.randomUUID().toString();
         //first 12 chars from xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx

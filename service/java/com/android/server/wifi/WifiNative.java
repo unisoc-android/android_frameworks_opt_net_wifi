@@ -71,7 +71,8 @@ import java.util.TimeZone;
  */
 public class WifiNative {
     private static final String TAG = "WifiNative";
-    private final SupplicantStaIfaceHal mSupplicantStaIfaceHal;
+    //private final SupplicantStaIfaceHal mSupplicantStaIfaceHal;
+    private final SupplicantStaIfaceHalEx mSupplicantStaIfaceHal;
     private final HostapdHal mHostapdHal;
     private final WifiVendorHal mWifiVendorHal;
     private final WificondControl mWificondControl;
@@ -90,7 +91,25 @@ public class WifiNative {
                       PropertyService propertyService, WifiMetrics wifiMetrics,
                       Handler handler, Random random) {
         mWifiVendorHal = vendorHal;
-        mSupplicantStaIfaceHal = staIfaceHal;
+        mSupplicantStaIfaceHal = null;
+        mHostapdHal = hostapdHal;
+        mWificondControl = condControl;
+        mWifiMonitor = wifiMonitor;
+        mNwManagementService = nwService;
+        mPropertyService = propertyService;
+        mWifiMetrics = wifiMetrics;
+        mHandler = handler;
+        mRandom = random;
+    }
+
+    public WifiNative(WifiVendorHal vendorHal,
+                      SupplicantStaIfaceHalEx staIfaceHalEx, HostapdHal hostapdHal,
+                      WificondControl condControl, WifiMonitor wifiMonitor,
+                      INetworkManagementService nwService,
+                      PropertyService propertyService, WifiMetrics wifiMetrics,
+                      Handler handler, Random random) {
+        mWifiVendorHal = vendorHal;
+        mSupplicantStaIfaceHal = staIfaceHalEx;
         mHostapdHal = hostapdHal;
         mWificondControl = condControl;
         mWifiMonitor = wifiMonitor;
@@ -1223,6 +1242,8 @@ public class WifiNative {
         public int associationFrequency;
         //Last received packet bit rate in Mbps.
         public int rxBitrate;
+        // Noise value in dBM.
+        public int noise;
     }
 
     /**
@@ -1530,6 +1551,16 @@ public class WifiNative {
          * Invoked when the channel switch event happens.
          */
         void onSoftApChannelSwitched(int frequency, int bandwidth);
+
+        /**
+         * Invoked when station connected to the AP.
+         */
+        void onSoftApConnectionEvent(String mac);
+
+        /**
+         * Invoked when station disconnected to the AP.
+         */
+        void onSoftApDisconnectionEvent(String mac);
     }
 
     private static final int CONNECT_TO_HOSTAPD_RETRY_INTERVAL_MS = 100;
@@ -3285,6 +3316,112 @@ public class WifiNative {
             }
         } else {
             return "*** failed to read kernel log ***";
+        }
+    }
+
+    //<-- Add for SoftAp Advance Feature END
+
+    //SPRD: Bug#474442 Add for Wifi Auto Roam Feature BEG-->
+    public synchronized boolean startBgscan(@NonNull String ifaceName, boolean enabled) {
+        final String bgscanLearn = "learn:300:-75:400:/data/misc/wifi/wpa_supplicant/network1.bgscan";
+        return mSupplicantStaIfaceHal.setParamToSupplicant(ifaceName, "SET_BGSCAN",
+                enabled ? bgscanLearn : "");
+    }
+    //<-- Add for Wifi Auto Roam Feature END
+    public boolean isHostapdConncted () {
+        Log.e(TAG,"isHostapdConncted");
+        return mHostapdHal.isInitializationComplete();
+    }
+
+    //SPRD: Bug#874791 Add for Softap Feature BEG-->
+    public boolean doHostapdBooleanCommand(String ifaceName, String cmd) {
+        return mHostapdHal.doHostapdBooleanCommand(ifaceName, cmd);
+    }
+    public int doHostapdIntCommand(String ifaceName, String cmd) {
+        return mHostapdHal.doHostapdIntCommand(ifaceName, cmd);
+    }
+    public String doHostapdStringCommand(String ifaceName, String cmd) {
+        return mHostapdHal.doHostapdStringCommand(ifaceName, cmd);
+    }
+
+    //NOTE: Add for softap support wps connect mode and hidden ssid Feature BEG-->
+    public boolean softApStartWpsPbc() {
+        if (getSoftApInterfaceName() != null) {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "WPS_PBC");
+        }
+        return false;
+    }
+
+    public boolean softApStartWpsPinKeypad(String pin) {
+        if (TextUtils.isEmpty(pin) || getSoftApInterfaceName() == null) return false;
+        return doHostapdBooleanCommand(getSoftApInterfaceName(), "WPS_PIN any " + pin);
+    }
+
+    public boolean softApCancelWps() {
+        if (getSoftApInterfaceName() != null) {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "WPS_CANCEL");
+        }
+        return false;
+    }
+
+    public boolean softApCheckWpsPin(String pin) {
+       if (TextUtils.isEmpty(pin) || getSoftApInterfaceName() == null) return false;
+     String res = doHostapdStringCommand(getSoftApInterfaceName(), "WPS_CHECK_PIN " + pin);
+     return (res != null && !res.equals("FAIL-CHECKSUM"));
+    }
+    //<-- Add for softap support wps connect mode and hidden ssid Feature END
+
+    //NOTE: Add For SoftAp advance Feature BEG-->
+
+    public boolean softApSetBlockStation(String mac, boolean enabled) {
+        if (getSoftApInterfaceName() == null) {
+            return false;
+        }
+        if (enabled) {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "DRIVER BLOCK " + mac);
+        } else {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "DRIVER UNBLOCK " + mac);
+        }
+    }
+
+    private static final String UNKOWN_COMMAND = "UNKNOWN COMMAND";
+    public String softApGetBlockStationList() {
+        if (getSoftApInterfaceName() == null) {
+            return null;
+        }
+        String blockList = doHostapdStringCommand(getSoftApInterfaceName(), "DRIVER BLOCK_LIST");
+        return UNKOWN_COMMAND.equalsIgnoreCase(blockList) ? "" : blockList;
+    }
+
+    /**
+     *  To add a station to the white list or remove from the white list
+     * enabled:
+     *     ture: add to the white list
+     *     false: remove from the white list
+     */
+    public boolean softApSetStationToWhiteList(String mac, boolean enabled) {
+        if (mac == null || getSoftApInterfaceName() == null) return false;
+        if (enabled) {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "DRIVER WHITE_ADD " + mac);
+        } else {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "DRIVER WHITE_DEL " + mac);
+        }
+    }
+
+    /**
+     *  To enable the white list mode or not
+     * enabled:
+     *     ture: enable white list
+     *     false: disable white list
+     */
+    public boolean softApSetWhiteListEnabled(boolean enabled) {
+        if (getSoftApInterfaceName() == null) {
+            return false;
+        }
+        if (enabled) {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "DRIVER WHITE_EN");//set macaddr_acl 1
+        } else {
+            return doHostapdBooleanCommand(getSoftApInterfaceName(), "DRIVER WHITE_DIS");//set macaddr_acl 0
         }
     }
 }

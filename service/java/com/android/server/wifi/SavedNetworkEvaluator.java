@@ -22,11 +22,14 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.telephony.SubscriptionManager;
 import android.util.LocalLog;
+import android.util.Log;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.TelephonyUtil;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.util.List;
 
 /**
@@ -38,6 +41,7 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
     private final WifiConfigManager mWifiConfigManager;
     private final Clock mClock;
     private final LocalLog mLocalLog;
+    private boolean mVerboseLoggingEnabled = false;
     private final WifiConnectivityHelper mConnectivityHelper;
     private final SubscriptionManager mSubscriptionManager;
     private final int mRssiScoreSlope;
@@ -83,8 +87,23 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
                 R.integer.config_wifi_framework_5GHz_preference_boost_factor);
     }
 
+    public void enableVerboseLogging(int verbose) {
+        if (verbose > 0) {
+            mVerboseLoggingEnabled = true;
+        } else {
+            mVerboseLoggingEnabled = false;
+        }
+    }
+
     private void localLog(String log) {
         mLocalLog.log(log);
+    }
+
+    /**
+     * Dump the local log buffer of SavedNetworkEvaluator.
+     */
+    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+        mLocalLog.dump(fd, pw, args);
     }
 
     /**
@@ -205,6 +224,11 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
                 continue;
             }
 
+            if (!network.autoJoin) {
+                localLog("Network " + network.SSID + " autoJoin = " + network.autoJoin + ", Skip");
+                continue;
+            }
+
             /**
              * Ignore Passpoint and Ephemeral networks. They are configured networks,
              * but without being persisted to the storage. They are evaluated by
@@ -231,8 +255,12 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
                         + scanResult.BSSID);
                 continue;
             } else if (TelephonyUtil.isSimConfig(network)
-                    && !TelephonyUtil.isSimPresent(mSubscriptionManager)) {
+                    //&& !TelephonyUtil.isSimPresent(mSubscriptionManager)) {
+                    && !mWifiConfigManager.isSimPresent(network.enterpriseConfig.getSimNum())) {
                 // Don't select if security type is EAP SIM/AKA/AKA' when SIM is not present.
+                if (mVerboseLoggingEnabled) {
+                    Log.d(NAME, "isSimPresent");
+                }
                 continue;
             }
 
@@ -252,8 +280,10 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
             // If the network is marked to use external scores, or is an open network with
             // curate saved open networks enabled, do not consider it for network selection.
             if (network.useExternalScores) {
-                localLog("Network " + WifiNetworkSelector.toNetworkString(network)
+                if (mVerboseLoggingEnabled) {
+                    Log.d(NAME, "Network " + WifiNetworkSelector.toNetworkString(network)
                         + " has external score.");
+                }
                 continue;
             }
 
@@ -279,7 +309,9 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         }
 
         if (scanResultCandidate == null) {
-            localLog("did not see any good candidates.");
+            if (mVerboseLoggingEnabled) {
+                Log.d(NAME, "did not see any good candidates.");
+            }
         }
         return candidate;
     }

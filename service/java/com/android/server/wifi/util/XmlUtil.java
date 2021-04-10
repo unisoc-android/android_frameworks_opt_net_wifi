@@ -349,6 +349,18 @@ public class XmlUtil {
         public static final String XML_TAG_RANDOMIZED_MAC_ADDRESS = "RandomizedMacAddress";
         public static final String XML_TAG_MAC_RANDOMIZATION_SETTING = "MacRandomizationSetting";
 
+        public static final String XML_TAG_WAPI_PSK_KEY_TYPE = "WapiPskKeyType";
+        public static final String XML_TAG_WAPI_AS_CERT = "WapiAsCert";
+        public static final String XML_TAG_WAPI_USER_CERT = "WapiUserCert";
+        public static final String XML_TAG_AUTOJOIN = "AutoJoin";
+        public static final String XML_TAG_AUTOJOINMENU = "AutoJoinMenu";
+        public static final String XML_TAG_MODIFY = "ModifyConfig";
+        public static final String XML_TAG_FORGET = "ForgetConfig";
+
+        // For adjust SprdroidP on OTA
+        private static final String XML_TAG_P_SIM_NUM = "EapSimSlot";
+        private static final String XML_TAG_P_AUTOJOIN = "AutoJoinNetwork";
+
         /**
          * Write WepKeys to the XML stream.
          * WepKeys array is intialized in WifiConfiguration constructor, but all of the elements
@@ -416,6 +428,15 @@ public class XmlUtil {
                     out, XML_TAG_ALLOWED_SUITE_B_CIPHERS,
                     configuration.allowedSuiteBCiphers.toByteArray());
             XmlUtil.writeNextValue(out, XML_TAG_SHARED, configuration.shared);
+
+            XmlUtil.writeNextValue(out, XML_TAG_WAPI_PSK_KEY_TYPE, configuration.wapiPskType);
+            XmlUtil.writeNextValue(out, XML_TAG_WAPI_AS_CERT, configuration.wapiAsCert);
+            XmlUtil.writeNextValue(out, XML_TAG_WAPI_USER_CERT, configuration.wapiUserCert);
+
+            XmlUtil.writeNextValue(out, XML_TAG_AUTOJOIN, configuration.autoJoin);
+            XmlUtil.writeNextValue(out, XML_TAG_AUTOJOINMENU, configuration.autoJoinMenu);
+            XmlUtil.writeNextValue(out, XML_TAG_MODIFY, configuration.canModify);
+            XmlUtil.writeNextValue(out, XML_TAG_FORGET, configuration.canForget);
         }
 
         /**
@@ -657,9 +678,36 @@ public class XmlUtil {
                         configuration.setRandomizedMacAddress(
                                 MacAddress.fromString((String) value));
                         break;
+                    case XML_TAG_WAPI_PSK_KEY_TYPE:
+                        configuration.wapiPskType = (int) value;
+                        break;
+                    case XML_TAG_WAPI_AS_CERT:
+                        configuration.wapiAsCert = (String) value;
+                        break;
+                    case XML_TAG_WAPI_USER_CERT:
+                        configuration.wapiUserCert = (String) value;
+                        break;
                     case XML_TAG_MAC_RANDOMIZATION_SETTING:
                         configuration.macRandomizationSetting = (int) value;
                         macRandomizationSettingExists = true;
+                        break;
+                    case XML_TAG_AUTOJOIN:
+                        configuration.autoJoin = (boolean) value;
+                        break;
+                    case XML_TAG_AUTOJOINMENU:
+                        configuration.autoJoinMenu = (boolean) value;
+                        break;
+                    case XML_TAG_MODIFY:
+                        configuration.canModify = (boolean) value;
+                        break;
+                    case XML_TAG_FORGET:
+                        configuration.canForget = (boolean) value;
+                        break;
+                    case XML_TAG_P_AUTOJOIN:
+                        configuration.autoJoin = (int) value != 0;
+                        break;
+                    case XML_TAG_P_SIM_NUM:
+                        configuration.eap_sim_slot = (int) value;
                         break;
                     default:
                         throw new XmlPullParserException(
@@ -1017,6 +1065,9 @@ public class XmlUtil {
         public static final String XML_TAG_PHASE2_METHOD = "Phase2Method";
         public static final String XML_TAG_PLMN = "PLMN";
         public static final String XML_TAG_REALM = "Realm";
+        public static final String XML_TAG_SIM_NUM = "SimNum";
+        public static final String XML_TAG_SIM_IMSI = "SimIMSI";
+        public static final String XML_TAG_MAX_CONNECT_TIME = "MaxConnectTime";
 
         /**
          * Write the WifiEnterpriseConfig data elements from the provided config to the XML
@@ -1055,6 +1106,9 @@ public class XmlUtil {
             XmlUtil.writeNextValue(out, XML_TAG_PHASE2_METHOD, enterpriseConfig.getPhase2Method());
             XmlUtil.writeNextValue(out, XML_TAG_PLMN, enterpriseConfig.getPlmn());
             XmlUtil.writeNextValue(out, XML_TAG_REALM, enterpriseConfig.getRealm());
+            XmlUtil.writeNextValue(out, XML_TAG_SIM_NUM, enterpriseConfig.getSimNum());
+            XmlUtil.writeNextValue(out, XML_TAG_SIM_IMSI, enterpriseConfig.getImsi());
+            XmlUtil.writeNextValue(out, XML_TAG_MAX_CONNECT_TIME, enterpriseConfig.getMaxConnectTIme());
         }
 
         /**
@@ -1135,6 +1189,15 @@ public class XmlUtil {
                         break;
                     case XML_TAG_REALM:
                         enterpriseConfig.setRealm((String) value);
+                        break;
+                    case XML_TAG_SIM_NUM:
+                        enterpriseConfig.setSimNum((int) value);
+                        break;
+                    case XML_TAG_SIM_IMSI:
+                        enterpriseConfig.setImsi((String) value);
+                        break;
+                    case XML_TAG_MAX_CONNECT_TIME:
+                        enterpriseConfig.setMaxConnectTime((int) value);
                         break;
                     default:
                         throw new XmlPullParserException(

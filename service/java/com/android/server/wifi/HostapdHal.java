@@ -21,6 +21,8 @@ import android.content.Context;
 import android.hardware.wifi.hostapd.V1_0.HostapdStatus;
 import android.hardware.wifi.hostapd.V1_0.HostapdStatusCode;
 import android.hardware.wifi.hostapd.V1_0.IHostapd;
+//import vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd;
+import vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapdCallbackEx;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
 import android.net.wifi.WifiConfiguration;
@@ -28,6 +30,7 @@ import android.os.Handler;
 import android.os.HwRemoteBinder;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.util.Log;
 
 import com.android.internal.R;
@@ -69,6 +72,9 @@ public class HostapdHal {
     private HostapdDeathRecipient mHostapdDeathRecipient;
     // Death recipient cookie registered for current supplicant instance.
     private long mDeathRecipientCookie = 0;
+    private final String AP_STA_CONNECTED_STR = "AP-STA-CONNECTED";
+    private final String AP_STA_DISCONNECTED_STR = "AP-STA-DISCONNECTED";
+    public String mInterfaceName = SystemProperties.get("wifi.interface", "wlan0");
 
     private final IServiceNotification mServiceNotificationCallback =
             new IServiceNotification.Stub() {
@@ -204,6 +210,7 @@ public class HostapdHal {
                     return false;
                 }
                 if (!linkToServiceManagerDeath()) {
+                    Log.e(TAG,"linkToServiceManagerDeath failed");
                     return false;
                 }
                 /* TODO(b/33639391) : Use the new IHostapd.registerForNotifications() once it
@@ -263,6 +270,22 @@ public class HostapdHal {
         }
     }
 
+    private boolean registerCallbackEx(
+            vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapdCallbackEx callback) {
+        synchronized (mLock) {
+            String methodStr = "registerCallback_1_1";
+            try {
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 = getHostapdMockableV1_1_Ex();
+                if (iHostapdV1_1 == null) return false;
+                HostapdStatus status =  iHostapdV1_1.registerCallbackEx(callback);
+                return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /**
      * Initialize the IHostapd object.
      * @return true on success, false otherwise.
@@ -291,6 +314,10 @@ public class HostapdHal {
                 mIHostapd = null;
                 return false;
             }
+            if (isV1_1() && !registerCallbackEx(new HostapdCallbackEx())) {
+                mIHostapd = null;
+                return false;
+            }
         }
         return true;
     }
@@ -307,7 +334,8 @@ public class HostapdHal {
                                   @NonNull WifiNative.SoftApListener listener) {
         synchronized (mLock) {
             final String methodStr = "addAccessPoint";
-            IHostapd.IfaceParams ifaceParams = new IHostapd.IfaceParams();
+            android.hardware.wifi.hostapd.V1_0.IHostapd.IfaceParams ifaceParams =
+                    new android.hardware.wifi.hostapd.V1_0.IHostapd.IfaceParams();
             ifaceParams.ifaceName = ifaceName;
             ifaceParams.hwModeParams.enable80211N = true;
             ifaceParams.hwModeParams.enable80211AC = mEnableIeee80211AC;
@@ -333,31 +361,36 @@ public class HostapdHal {
                 ifaceParams.channelParams.channel = config.apChannel;
             }
 
-            IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
+            vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.NetworkParamsEx nwParams =
+                    new vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.NetworkParamsEx();
             // TODO(b/67745880) Note that config.SSID is intended to be either a
             // hex string or "double quoted".
             // However, it seems that whatever is handing us these configurations does not obey
             // this convention.
-            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
-            nwParams.isHidden = config.hiddenSSID;
-            nwParams.encryptionType = getEncryptionType(config);
-            nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+            nwParams.networkParams.ssid.addAll(NativeUtil.stringToByteArrayListForSsid(config.SSID));
+            nwParams.networkParams.isHidden = config.hiddenSSID;
+            nwParams.networkParams.encryptionType = getEncryptionType(config);
+            nwParams.networkParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+            nwParams.softApMaxNumSta = config.softApMaxNumSta;
+            nwParams.macAddrAcl = config.macAddrAcl;
             if (!checkHostapdAndLogFailure(methodStr)) return false;
             try {
                 HostapdStatus status;
                 if (isV1_1()) {
-                    android.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
-                            new android.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
+                    vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
+                            new vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
                     ifaceParams1_1.V1_0 = ifaceParams;
                     if (mEnableAcs) {
                         ifaceParams1_1.channelParams.acsChannelRanges.addAll(mAcsChannelRanges);
                     }
-                    android.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
-                            getHostapdMockableV1_1();
+                    vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
+                            getHostapdMockableV1_1_Ex();
                     if (iHostapdV1_1 == null) return false;
-                    status = iHostapdV1_1.addAccessPoint_1_1(ifaceParams1_1, nwParams);
+                    status = iHostapdV1_1.addAccessPointEx_1_1(ifaceParams1_1, nwParams);
                 } else {
-                    status = mIHostapd.addAccessPoint(ifaceParams, nwParams);
+                    android.hardware.wifi.hostapd.V1_0.IHostapd.NetworkParams nwParams1_0 =
+                            new android.hardware.wifi.hostapd.V1_0.IHostapd.NetworkParams();
+                    status = mIHostapd.addAccessPoint(ifaceParams, nwParams1_0);
                 }
                 if (!checkStatusAndLogFailure(status, methodStr)) {
                     return false;
@@ -530,6 +563,18 @@ public class HostapdHal {
         }
     }
 
+    protected vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd getHostapdMockableV1_1_Ex()
+            throws RemoteException {
+        synchronized (mLock) {
+            try {
+                return vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.castFrom(mIHostapd);
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "Failed to get IHostapd", e);
+                return null;
+            }
+        }
+    }
+
     private static int getEncryptionType(WifiConfiguration localConfig) {
         int encryptionType;
         switch (localConfig.getAuthType()) {
@@ -649,6 +694,79 @@ public class HostapdHal {
         }
     }
 
+    public boolean doHostapdBooleanCommand(String ifaceName, String cmd) {
+        final String methodStr = "doHostapdBooleanCommand";
+        synchronized (mLock) {
+            try {
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
+                        getHostapdMockableV1_1_Ex();
+                if (iHostapdV1_1 == null) {
+                    Log.d(TAG, "doHostapdBooleanCommand iHostapdV1_1 is null");
+                    return false;
+                }
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
+                        new vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
+                ifaceParams1_1.V1_0.ifaceName = ifaceName;
+                Log.e(TAG, "doHostapdBooleanCommand");
+                //if (!checkSupplicantAndLogFailure(methodStr)) return false;
+                return iHostapdV1_1.doHostapdBooleanCommand(ifaceParams1_1, cmd);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /** See IHostapd.hal for documentation */
+    public int doHostapdIntCommand(String ifaceName, String cmd) {
+        final String methodStr = "doHostapdIntCommand";
+        synchronized (mLock) {
+            try {
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
+                        getHostapdMockableV1_1_Ex();
+                if (iHostapdV1_1 == null) {
+                    Log.d(TAG, "doHostapdIntCommand iHostapdV1_1 is null");
+                    return 0;
+                }
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
+                        new vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
+                ifaceParams1_1.V1_0.ifaceName = ifaceName;
+                Log.e(TAG, "doHostapdIntCommand");
+                //if (!checkSupplicantAndLogFailure(methodStr)) return false;
+                return iHostapdV1_1.doHostapdIntCommand(ifaceParams1_1, cmd);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return 0;
+            }
+        }
+    }
+
+    /** See IHostapd.hal for documentation */
+    public String doHostapdStringCommand(String ifaceName, String cmd) {
+        final String methodStr = "doHostapdStringCommand";
+        synchronized (mLock) {
+            try {
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
+                        getHostapdMockableV1_1_Ex();
+                if (iHostapdV1_1 == null) {
+                    Log.d(TAG, "doHostapdStringCommand iHostapdV1_1 is null");
+                    return "fail";
+                }
+                vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
+                        new vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
+                ifaceParams1_1.V1_0.ifaceName = ifaceName;
+                Log.e(TAG, "doHostapdStringCommand");
+                //if (!checkSupplicantAndLogFailure(methodStr)) return false;
+                String result = iHostapdV1_1.doHostapdStringCommand(ifaceParams1_1, cmd);
+                Log.e(TAG, "doHostapdStringCommand return " + result);
+                return result;
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return "fail";
+            }
+        }
+    }
+
     private class HostapdCallback extends
             android.hardware.wifi.hostapd.V1_1.IHostapdCallback.Stub {
         @Override
@@ -657,6 +775,28 @@ public class HostapdHal {
             WifiNative.SoftApListener listener = mSoftApListeners.get(ifaceName);
             if (listener != null) {
                 listener.onFailure();
+            }
+        }
+    }
+
+    private class HostapdCallbackEx extends
+            vendor.sprd.hardware.wifi.hostapd.V1_1.IHostapdCallbackEx.Stub {
+        @Override
+        public void HostApEvents(String staEvent) {
+            WifiNative.SoftApListener listener = mSoftApListeners.get(mInterfaceName);
+            Log.e(TAG, "call back :" + staEvent + ", listener= " + listener);
+            String[] tokens = staEvent.split(" ");
+            /* AP-STA-CONNECTED 42:fc:89:a8:96:09 */
+            if (tokens[0].equals(AP_STA_CONNECTED_STR)) {
+                if (listener != null) {
+                    Log.e(TAG, "HostApEvents onSoftApConnectionEvent");
+                    listener.onSoftApConnectionEvent(tokens[1]);
+                }
+            /* AP-STA-DISCONNECTED 42:fc:89:a8:96:09 */
+            } else if (tokens[0].equals(AP_STA_DISCONNECTED_STR)) {
+                if (listener != null) {
+                    listener.onSoftApDisconnectionEvent(tokens[1]);
+                }
             }
         }
     }

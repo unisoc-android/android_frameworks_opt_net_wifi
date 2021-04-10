@@ -102,6 +102,7 @@ public class WifiMonitor {
     private static final int REASON_TKIP_ONLY_PROHIBITED = 1;
     private static final int REASON_WEP_PROHIBITED = 2;
 
+
     private final WifiInjector mWifiInjector;
     private boolean mVerboseLoggingEnabled = false;
     private boolean mConnected = false;
@@ -543,5 +544,73 @@ public class WifiMonitor {
      */
     public void broadcastSupplicantDisconnectionEvent(String iface) {
         sendMessage(iface, SUP_DISCONNECTION_EVENT);
+    }
+
+    //=============================================================================
+    // add by sprd start
+    //=============================================================================
+
+    //SPRD: Bug #633317 Add for 11r/okc offload roaming BEG-->
+    public static final int OFFLOAD_ROAM_NOTIFY_EVENT            = BASE + 66;
+    /**
+    * <pre>
+    * CTRL-EVENT-OFFLOAD-ROAM-NOTIFY notify 11r/ock offload roam.
+    * <pre>
+    */
+    private static final String OFFLOAD_ROAM_NOTIFY_STR = "OFFLOAD-ROAM-NOTIFY";
+    //<-- Add for 11r/okc offload roaming END
+
+    //SPRD: Bug #474464 Porting WAPI feature BEG-->
+    /** Adding WAPI prefix */
+    private static final String WAPI_EVENT_PREFIX_STR = "WAPI:";
+    private static final String WAPI_AUTHENTICATION_FAILURE_STR = "authentication failed";
+    private static final String WAPI_CERTIFICATION_FAILURE_STR = "certificate failed";
+    private static final String WAPI_CERTIFICATION_LOST_STR = "certificate lost";
+
+    /* WAPI events leaving some gap*/
+    public static final int WAPI_AUTHENTICATION_FAILURE_EVENT    = BASE + 67;
+    public static final int WAPI_CERTIFICATION_FAILURE_EVENT     = BASE + 68;
+    public static final int WAPI_CERTIFICATION_LOST_EVENT        = BASE + 69;
+
+    // Parsing WAPI event
+    private boolean dispatchWapiEvent( String iface, String eventStr) {
+        if (0 < eventStr.indexOf(WAPI_CERTIFICATION_FAILURE_STR)) {
+            Log.v(TAG, "Got WAPI event [" + eventStr + "]");
+            sendMessage(iface, WAPI_CERTIFICATION_FAILURE_EVENT);
+            return true;
+        }
+        else if (0 < eventStr.indexOf(WAPI_AUTHENTICATION_FAILURE_STR)) {
+            Log.v(TAG, "Got WAPI event [" + eventStr + "]");
+            sendMessage(iface, WAPI_AUTHENTICATION_FAILURE_EVENT);
+            return true;
+        }
+        else if (0 < eventStr.indexOf(WAPI_CERTIFICATION_LOST_STR)) {
+            Log.v(TAG, "Got WAPI event [" + eventStr + "]");
+            sendMessage(iface, WAPI_CERTIFICATION_LOST_EVENT);
+            return true;
+        }
+        return false;
+    }
+    //<-- Porting WAPI feature END
+
+
+    /**
+     * Broadcast extension events to all the handlers registered for
+     * this event.
+     *
+     * @param iface Name of iface on which this occurred.
+     * @param eventEx.
+     */
+    public void broadcastSupplicantEventEx(String iface, String eventEx) {
+        if (eventEx == null || eventEx.isEmpty()) {
+            return;
+        }
+
+        if (eventEx.startsWith(WAPI_EVENT_PREFIX_STR)) {
+            dispatchWapiEvent(iface, eventEx);
+        }
+        else if (eventEx.indexOf(OFFLOAD_ROAM_NOTIFY_STR) > 0) { //Offload roaming event
+            sendMessage(iface, OFFLOAD_ROAM_NOTIFY_EVENT);
+        }
     }
 }

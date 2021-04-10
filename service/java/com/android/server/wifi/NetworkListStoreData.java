@@ -278,6 +278,10 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         configuration.setNetworkSelectionStatus(status);
         configuration.setIpConfiguration(ipConfiguration);
         if (enterpriseConfig != null) {
+            // For SprdroidP OTA, should cover SprdroidP WifiConfigStrore value
+            if (configuration.eap_sim_slot != -1) {
+                enterpriseConfig.setSimNum(configuration.eap_sim_slot);
+            }
             configuration.enterpriseConfig = enterpriseConfig;
         }
         return configuration;

@@ -16,6 +16,10 @@
 
 package com.android.server.wifi.p2p;
 
+import static android.net.wifi.WifiManager.WIFI_FREQUENCY_BAND_AUTO;
+import static android.net.wifi.WifiManager.WIFI_FREQUENCY_BAND_2GHZ;
+import static android.net.wifi.WifiManager.WIFI_FREQUENCY_BAND_5GHZ;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.hardware.wifi.V1_0.IWifiP2pIface;
@@ -41,7 +45,8 @@ import com.android.server.wifi.WifiVendorHal;
 public class WifiP2pNative {
     private static final String TAG = "WifiP2pNative";
     private boolean mVerboseLoggingEnabled = false;
-    private final SupplicantP2pIfaceHal mSupplicantP2pIfaceHal;
+    //private final SupplicantP2pIfaceHal mSupplicantP2pIfaceHal;
+    private final SupplicantP2pIfaceHalEx mSupplicantP2pIfaceHal;
     private final HalDeviceManager mHalDeviceManager;
     private final PropertyService mPropertyService;
     private final WifiVendorHal mWifiVendorHal;
@@ -112,7 +117,16 @@ public class WifiP2pNative {
             SupplicantP2pIfaceHal p2pIfaceHal, HalDeviceManager halDeviceManager,
             PropertyService propertyService) {
         mWifiVendorHal = wifiVendorHal;
-        mSupplicantP2pIfaceHal = p2pIfaceHal;
+        mSupplicantP2pIfaceHal = null;
+        mHalDeviceManager = halDeviceManager;
+        mPropertyService = propertyService;
+    }
+
+    public WifiP2pNative(WifiVendorHal wifiVendorHal,
+            SupplicantP2pIfaceHalEx p2pIfaceHalEx, HalDeviceManager halDeviceManager,
+            PropertyService propertyService) {
+        mWifiVendorHal = wifiVendorHal;
+        mSupplicantP2pIfaceHal = p2pIfaceHalEx;
         mHalDeviceManager = halDeviceManager;
         mPropertyService = propertyService;
     }
@@ -844,5 +858,74 @@ public class WifiP2pNative {
      */
     public long getSupportedFeatureSet(@NonNull String ifaceName) {
         return mWifiVendorHal.getSupportedFeatureSet(ifaceName);
+    }
+
+    /**
+     * Set P2P band parameter to supplicant.
+     *
+     * @param key the config key.
+     * @param value the config value.
+     * @return true, if operation was successful.
+     */
+    public boolean setParamToP2pSupplicant(String key, String value) {
+        return mSupplicantP2pIfaceHal.setParamToP2pSupplicant(key, value);
+    }
+
+    /**
+     * Get P2P band parameter from supplicant.
+     *
+     * @param key the config key.
+     * @return value the config value.
+     */
+    public int getParamToP2pSupplicant(String key) {
+        return mSupplicantP2pIfaceHal.getParamToP2pSupplicant(key);
+    }
+
+    //<-- Add for SoftAp Advance Feature
+    /**
+     * Set the operational frequency band for p2p
+     */
+    public boolean setP2pBand(int band) {
+        String p2p_listen_reg_class, p2p_listen_channel, p2p_oper_reg_class, p2p_oper_channel;
+
+        if (band == WIFI_FREQUENCY_BAND_2GHZ) {
+            p2p_listen_reg_class = "81";
+            p2p_listen_channel = "6";
+            p2p_oper_reg_class = "81";
+            p2p_oper_channel = "5";
+        } else if (band == WIFI_FREQUENCY_BAND_5GHZ) {
+            p2p_listen_reg_class = "115";
+            p2p_listen_channel = "40";
+            p2p_oper_reg_class = "115";
+            p2p_oper_channel = "40";
+        } else {
+            p2p_listen_reg_class = "";
+            p2p_listen_channel = "";
+            p2p_oper_reg_class = "";
+            p2p_oper_channel = "";
+        }
+        return setParamToP2pSupplicant("SET_P2P_BAND p2p_listen_reg_class",p2p_listen_reg_class) &&
+                setParamToP2pSupplicant("SET_P2P_BAND p2p_listen_channel",p2p_listen_channel) &&
+                setParamToP2pSupplicant("SET_P2P_BAND p2p_oper_reg_class",p2p_oper_reg_class) &&
+                setParamToP2pSupplicant("SET_P2P_BAND p2p_oper_channel",p2p_oper_channel)&&
+                saveConfig();
+    }
+
+    /**
+     * Get the operational frequency band for p2p
+     */
+    public int getP2pBand() {
+        if ((81 == getParamToP2pSupplicant("GET_P2P_BAND p2p_listen_reg_class")) &&
+                (6 == getParamToP2pSupplicant("GET_P2P_BAND p2p_listen_channel")) &&
+                (81 == getParamToP2pSupplicant("GET_P2P_BAND p2p_oper_reg_class")) &&
+                (5 == getParamToP2pSupplicant("GET_P2P_BAND p2p_oper_channel"))) {
+            return WIFI_FREQUENCY_BAND_2GHZ;
+        } else if ((115 == getParamToP2pSupplicant("GET_P2P_BAND p2p_listen_reg_class")) &&
+                (40 == getParamToP2pSupplicant("GET_P2P_BAND p2p_listen_channel")) &&
+                (115 == getParamToP2pSupplicant("GET_P2P_BAND p2p_oper_reg_class")) &&
+                (40 == getParamToP2pSupplicant("GET_P2P_BAND p2p_oper_channel"))) {
+            return WIFI_FREQUENCY_BAND_5GHZ;
+        }
+        return WIFI_FREQUENCY_BAND_AUTO;
     }
 }

@@ -67,6 +67,23 @@ public class NativeUtil {
     }
 
     /**
+     * Convert the string to byte array list.
+     *
+     * @return the UTF_8 char byte values of str, as an ArrayList.
+     * @throws IllegalArgumentException if a null string is sent.
+     */
+    public static ArrayList<Byte> stringToByteArrayListForSsid(String str) {
+        if (str == null) {
+            throw new IllegalArgumentException("null string");
+        }
+        ArrayList<Byte> byteArrayList = new ArrayList<Byte>();
+        for (byte b : str.getBytes(StandardCharsets.UTF_8)) {
+            byteArrayList.add(new Byte(b));
+        }
+        return byteArrayList;
+    }
+
+    /**
      * Convert the byte array list to string.
      *
      * @return the string decoded from UTF_8 byte values in byteArrayList.

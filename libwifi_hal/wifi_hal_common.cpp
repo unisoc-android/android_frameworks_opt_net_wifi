@@ -85,7 +85,7 @@ static int rmmod(const char *modname) {
   }
 
   if (ret != 0)
-    PLOG(DEBUG) << "Unable to unload driver module '" << modname << "'";
+    PLOG(ERROR) << "Unable to unload driver module '" << modname << "'";
   return ret;
 }
 
@@ -122,7 +122,7 @@ int is_wifi_driver_loaded() {
     return 0; /* driver not loaded */
   }
 
-  if (!is_driver_loaded) {
+  if (!is_driver_loaded && strcmp(driver_status, "ok") != 0) {
     return 0;
   } /* driver not loaded */
 
@@ -187,6 +187,8 @@ int wifi_load_driver() {
   }
 #endif
   is_driver_loaded = true;
+  property_set(DRIVER_PROP_NAME, "ok");
+  PLOG(INFO) << "wifi_load_driver success";
   return 0;
 }
 
@@ -203,6 +205,7 @@ int wifi_unload_driver() {
     }
     usleep(500000); /* allow card removal */
     if (count) {
+      PLOG(INFO) << "wifi_unload_driver success";
       return 0;
     }
     return -1;
@@ -216,6 +219,7 @@ int wifi_unload_driver() {
 #endif
   is_driver_loaded = false;
   property_set(DRIVER_PROP_NAME, "unloaded");
+  PLOG(INFO) << "wifi_unload_driver success";
   return 0;
 #endif
 }

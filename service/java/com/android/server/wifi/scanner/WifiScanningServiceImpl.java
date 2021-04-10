@@ -21,9 +21,20 @@ import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 
 import android.Manifest;
 import android.app.AlarmManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.database.ContentObserver;
+import android.hardware.Sensor;
+import android.hardware.SprdSensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.net.wifi.IWifiScanner;
 import android.net.wifi.ScanResult;
+import android.net.wifi.WifiFeaturesUtils;
+import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiScanner.ChannelSpec;
 import android.net.wifi.WifiScanner.PnoSettings;
@@ -35,7 +46,9 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.os.WorkSource;
+import android.provider.Settings;
 import android.util.ArrayMap;
 import android.util.LocalLog;
 import android.util.Log;
@@ -97,6 +110,15 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
 
     private WifiScannerImpl mScannerImpl;
 
+    // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+    private int mWifiState = WifiManager.WIFI_STATE_DISABLED;
+    private int mPocketModeSwitch;
+    private boolean mInPocketMode = false;
+    private boolean mIsRequestTriggerSensor = false;
+    private final SensorManager mSensorManager;
+    private final Sensor mSigMotion;
+    private SensorEventListener mSensorEventListener;
+    // <-- Add PocketMode's wifi feature END
     @Override
     public Messenger getMessenger() {
         if (mClientHandler != null) {
@@ -286,14 +308,32 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                     mPnoScanStateMachine.sendMessage(CMD_DRIVER_UNLOADED);
                     break;
                 case WifiScanner.CMD_START_BACKGROUND_SCAN:
+                    // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+                    if (mInPocketMode == true) {
+                        Log.i(TAG, "Current mode is PocketMode");
+                        break;
+                    }
+                    // <-- Add PocketMode's wifi feature END
                 case WifiScanner.CMD_STOP_BACKGROUND_SCAN:
                     mBackgroundScanStateMachine.sendMessage(Message.obtain(msg));
                     break;
                 case WifiScanner.CMD_START_PNO_SCAN:
+                // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+                if (mInPocketMode == true) {
+                    Log.i(TAG, "Current mode is PocketMode");
+                    break;
+                }
+                // <-- Add PocketMode's wifi feature END
                 case WifiScanner.CMD_STOP_PNO_SCAN:
                     mPnoScanStateMachine.sendMessage(Message.obtain(msg));
                     break;
                 case WifiScanner.CMD_START_SINGLE_SCAN:
+                // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+                if (mInPocketMode == true) {
+                    Log.i(TAG, "Current mode is PocketMode");
+                    break;
+                }
+                // <-- Add PocketMode's wifi feature END
                 case WifiScanner.CMD_STOP_SINGLE_SCAN:
                     mSingleScanStateMachine.sendMessage(Message.obtain(msg));
                     break;
@@ -363,12 +403,75 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         mFrameworkFacade = wifiInjector.getFrameworkFacade();
         mWifiPermissionsUtil = wifiInjector.getWifiPermissionsUtil();
         mPreviousSchedule = null;
+        // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+        mSensorManager = (SensorManager) mContext.getSystemService(Context.SENSOR_SERVICE);
+        // Sensor.TYPEPROXIMITY is used in code development phase
+        mSigMotion = mSensorManager.getDefaultSensor(SprdSensor.TYPE_SPRDHUB_POCKET_MODE);
+        if (WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_WIFI_POCKET_MODE) {
+            mSensorEventListener = new WifiSensorEventListener();
+            mPocketModeSwitch = Settings.Global.getInt(mContext.getContentResolver(),
+                   Settings.Global.POWER_SAVING, 0);
+            mContext.getContentResolver().registerContentObserver(Settings.Global.getUriFor(
+                    Settings.Global.POWER_SAVING), false,
+                    new ContentObserver(mClientHandler) {
+                        @Override
+                        public void onChange(boolean selfChange) {
+                            mPocketModeSwitch = Settings.Global.getInt(mContext.getContentResolver(),
+                                   Settings.Global.POWER_SAVING, 0);
+                            if (mPocketModeSwitch == 1 && mWifiState ==WifiManager.WIFI_STATE_ENABLED) {
+                                if (mIsRequestTriggerSensor == false) {
+                                    mSensorManager.registerListener(mSensorEventListener, mSigMotion,
+                                               SensorManager.SENSOR_DELAY_NORMAL);
+                                    mIsRequestTriggerSensor = true;
+                                }
+                            } else {
+                                if (mIsRequestTriggerSensor) {
+                                    mSensorManager.unregisterListener(mSensorEventListener);
+                                    mIsRequestTriggerSensor = false;
+                                }
+                                mInPocketMode = false;
+                            }
+                            Log.i(TAG, "onChange() mPocketModeSwitch = " + mPocketModeSwitch);
+                        }
+                    });
+        }
+
     }
 
     public void startService() {
         mBackgroundScanStateMachine = new WifiBackgroundScanStateMachine(mLooper);
         mSingleScanStateMachine = new WifiSingleScanStateMachine(mLooper);
         mPnoScanStateMachine = new WifiPnoScanStateMachine(mLooper);
+        if (WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_WIFI_POCKET_MODE) {
+            mContext.registerReceiver(
+                    new BroadcastReceiver() {
+                        @Override
+                        public void onReceive(Context context, Intent intent) {
+                            int state = intent.getIntExtra(
+                                    WifiManager.EXTRA_SCAN_AVAILABLE, WifiManager.WIFI_STATE_DISABLED);
+                            if (DBG) localLog("SCAN_AVAILABLE : " + state);
+                            if (state == WifiManager.WIFI_STATE_ENABLED) {
+                                // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+                                mWifiState = state;
+                                if (mPocketModeSwitch == 1 && mIsRequestTriggerSensor == false) {
+                                    mSensorManager.registerListener(mSensorEventListener, mSigMotion,
+                                                SensorManager.SENSOR_DELAY_NORMAL);
+                                    mIsRequestTriggerSensor = true;
+                                }
+                                // <-- Add PocketMode's wifi feature END
+                            } else if (state == WifiManager.WIFI_STATE_DISABLED) {
+                                // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+                                mWifiState = state;
+                                if (mIsRequestTriggerSensor == true) {
+                                    mInPocketMode = false;
+                                    mSensorManager.unregisterListener(mSensorEventListener);
+                                    mIsRequestTriggerSensor = false;
+                                }
+                                // <-- Add PocketMode's wifi feature END
+                            }
+                        }
+                    }, new IntentFilter(WifiManager.WIFI_SCAN_AVAILABLE));
+        }
 
         mBackgroundScanStateMachine.start();
         mSingleScanStateMachine.start();
@@ -1057,6 +1160,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         List<ScanResult> getCachedScanResultsAsList() {
             return mCachedScanResults;
         }
+
     }
 
     class WifiBackgroundScanStateMachine extends StateMachine
@@ -2292,4 +2396,31 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
           .append(" } ");
         return sb.toString();
     }
+
+    // SPRD: Bug#838624 Add PocketMode's wifi feature BEG-->
+    private class WifiSensorEventListener implements SensorEventListener {
+
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            // TODO Auto-generated method stub
+            handlePocketModeChanged(event);
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            // TODO Auto-generated method stub
+        }
+    }
+
+    private void handlePocketModeChanged(SensorEvent event) {
+        int eventValue = (int) event.values[0];
+        if (eventValue == 1) {
+            mInPocketMode = true;
+        } else {
+            mInPocketMode = false;
+        }
+        Log.i(TAG, "handlePocketModeChanged() eventValue = " + eventValue
+                + " mPocketModeSwitch = " + mPocketModeSwitch + " mInPocketMode = " + mInPocketMode);
+    }
+    // <-- Add PocketMode's wifi feature END
 }

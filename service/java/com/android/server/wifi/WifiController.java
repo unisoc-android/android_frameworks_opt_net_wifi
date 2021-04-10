@@ -16,11 +16,14 @@
 
 package com.android.server.wifi;
 
+import static android.net.ConnectivityManager.TETHERING_WIFI;
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.location.LocationManager;
+import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -44,6 +47,7 @@ public class WifiController extends StateMachine {
     private static final boolean DBG = false;
     private Context mContext;
     private boolean mFirstUserSignOnSeen = false;
+    private boolean mRestartSoftap = false;
 
     /**
      * See {@link Settings.Global#WIFI_REENABLE_DELAY_MS}.  This is the default value if a
@@ -66,6 +70,8 @@ public class WifiController extends StateMachine {
     private final WifiSettingsStore mSettingsStore;
     private final FrameworkFacade mFacade;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
+
+    private ConnectivityManager mConnectivityManager;
 
     private long mReEnableDelayMillis;
 
@@ -92,6 +98,9 @@ public class WifiController extends StateMachine {
     static final int CMD_STA_STOPPED                            = BASE + 20;
     static final int CMD_SCANNING_STOPPED                       = BASE + 21;
     static final int CMD_DEFERRED_RECOVERY_RESTART_WIFI         = BASE + 22;
+
+    // Command used to restart SoftAp when wifiApConfig changed
+    static final int CMD_RESTART_AP                             = BASE + 23;
 
     private DefaultState mDefaultState = new DefaultState();
     private StaEnabledState mStaEnabledState = new StaEnabledState();
@@ -302,12 +311,20 @@ public class WifiController extends StateMachine {
                     break;
                 case CMD_AP_STOPPED:
                     log("SoftAp mode disabled, determine next state");
-                    if (mSettingsStore.isWifiToggleEnabled()) {
+                    if (mRestartSoftap) {
+                        mRestartSoftap = false;
+                        setWifiTetheringEnabled(true);
+                    } else if (mSettingsStore.isWifiToggleEnabled()) {
                         transitionTo(mStaEnabledState);
                     } else if (checkScanOnlyModeAvailable()) {
                         transitionTo(mStaDisabledWithScanState);
                     }
                     // wifi should remain disabled, do not need to transition
+                    break;
+                case CMD_RESTART_AP:
+                    log("SoftAp should restart");
+                    mRestartSoftap = true;
+                    setWifiTetheringEnabled(false);
                     break;
                 default:
                     throw new RuntimeException("WifiController.handleMessage " + msg.what);
@@ -642,6 +659,7 @@ public class WifiController extends StateMachine {
                     // do not want to trigger a mode switch if we are in emergency mode
                     return HANDLED;
                 case CMD_SET_AP:
+                case CMD_RESTART_AP:
                     // do not want to start softap if we are in emergency mode
                     return HANDLED;
                 default:
@@ -667,6 +685,38 @@ public class WifiController extends StateMachine {
                 } else {
                     transitionTo(mStaDisabledState);
                 }
+            }
+        }
+    }
+
+    OnStartTetheringCallback mTetheringCallback = null;
+    private final class OnStartTetheringCallback extends
+            ConnectivityManager.OnStartTetheringCallback {
+        @Override
+        public void onTetheringStarted() {
+            logd("onTetheringStarted");
+        }
+
+        @Override
+        public void onTetheringFailed() {
+            loge("onTetheringFailed");
+        }
+    }
+
+    /**
+     * enable or disable wifiTethering
+     */
+    public void setWifiTetheringEnabled(boolean enabled) {
+        if (mConnectivityManager == null) {
+            mConnectivityManager = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+        }
+        if (mConnectivityManager != null) {
+            if (enabled) {
+                mTetheringCallback = new OnStartTetheringCallback();
+                mConnectivityManager.startTethering(TETHERING_WIFI, true, mTetheringCallback);
+            } else {
+                mConnectivityManager.stopTethering(TETHERING_WIFI);
+                mTetheringCallback = null;
             }
         }
     }

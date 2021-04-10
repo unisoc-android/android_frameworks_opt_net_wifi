@@ -39,6 +39,7 @@ import android.net.ip.IIpClient;
 import android.net.ip.IpClientCallbacks;
 import android.net.ip.IpClientUtil;
 import android.net.shared.ProvisioningConfiguration;
+import android.net.wifi.WifiFeaturesUtils;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WpsInfo;
 import android.net.wifi.p2p.IWifiP2pManager;
@@ -212,6 +213,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     private static final int IPC_PROVISIONING_SUCCESS       =   BASE + 33;
     private static final int IPC_PROVISIONING_FAILURE       =   BASE + 34;
 
+    public static final int SET_P2P_BAND                    =   BASE + 40;
+    public static final int GET_P2P_BAND                    =   BASE + 41;
+
     public static final int ENABLED                         = 1;
     public static final int DISABLED                        = 0;
 
@@ -265,6 +269,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     // An anonymized device address. This is used instead of the own device MAC to prevent the
     // latter from leaking to apps
     private static final String ANONYMIZED_DEVICE_ADDRESS = "02:00:00:00:00:00";
+
+    //NOTE: Support wifi-p2p do not coexist BEG-->
+    public static boolean mP2pConnectingOrConnected = false;
+    //<-- Support wifi-p2p do not coexist END
+
+    // when GC can not get GO deviceName, need discovery again
+    boolean needDiscovery = false;
 
     /**
      * Error code definition.
@@ -450,7 +461,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         mNetworkInfo = new NetworkInfo(ConnectivityManager.TYPE_WIFI_P2P, 0, NETWORKTYPE, "");
 
         mP2pSupported = mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_DIRECT);
+                PackageManager.FEATURE_WIFI_DIRECT)
+                && WifiFeaturesUtils.getInstance(context).isSupportP2pFeature();
 
         mThisDevice.primaryDeviceType = mContext.getResources().getString(
                 com.android.internal.R.string.config_wifi_p2p_device_type);
@@ -507,7 +519,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         mIpClientStartIndex++;
         if (mIpClient != null) {
             try {
-                mIpClient.stop();
+                mIpClient.shutdown();
             } catch (RemoteException e) {
                 e.rethrowFromSystemServer();
             }
@@ -651,11 +663,11 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 try {
                     dhd.mMessenger.send(
                             mClientHandler.obtainMessage(WifiP2pManager.STOP_DISCOVERY));
-                    dhd.mMessenger.send(mClientHandler.obtainMessage(WifiP2pManager.REMOVE_GROUP));
+                    //dhd.mMessenger.send(mClientHandler.obtainMessage(WifiP2pManager.REMOVE_GROUP));
                 } catch (RemoteException e) {
                     Log.e(TAG, "close: Failed sending clean-up commands: e=" + e);
                 }
-                mP2pStateMachine.sendMessage(DISABLE_P2P);
+                //mP2pStateMachine.sendMessage(DISABLE_P2P);
             }
         }
     }
@@ -685,6 +697,21 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         }
     }
 
+    @Override
+    public void setP2pBand(int band) {
+        enforceConnectivityInternalPermission();
+        mP2pStateMachine.sendMessage(SET_P2P_BAND, band);
+    }
+
+    @Override
+    public int getP2pBand() {
+        enforceConnectivityInternalPermission();
+        if (mWifiInjector == null) {
+            mWifiInjector = WifiInjector.getInstance();
+        }
+        int p2pBand = mWifiInjector.getWifiP2pNative().getP2pBand();
+        return p2pBand;
+    }
     private boolean getWfdPermission(int uid) {
         WifiPermissionsWrapper wifiPermissionsWrapper = mWifiInjector.getWifiPermissionsWrapper();
         return wifiPermissionsWrapper.getUidPermission(
@@ -1037,6 +1064,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             replyToMessage(message, WifiP2pManager.SET_WFD_INFO_FAILED,
                                     WifiP2pManager.BUSY);
                         }
+                        break;
+                    case SET_P2P_BAND:
+                        mWifiNative.setP2pBand(message.arg1);
                         break;
                     case WifiP2pManager.REQUEST_PEERS:
                         replyToMessage(message, WifiP2pManager.RESPONSE_PEERS,
@@ -1535,6 +1565,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         break;
                     case WifiP2pMonitor.P2P_FIND_STOPPED_EVENT:
                         sendP2pDiscoveryChangedBroadcast(false);
+                        needDiscovery = false;
                         break;
                     case WifiP2pManager.STOP_DISCOVERY:
                         if (mWifiNative.p2pStopFind()) {
@@ -1581,6 +1612,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         if (mThisDevice.deviceAddress.equals(device.deviceAddress)) break;
                         mPeers.updateSupplicantDetails(device);
                         sendPeersChangedBroadcast();
+                        if (needDiscovery && !EMPTY_DEVICE_ADDRESS.equals(device.deviceAddress)) {
+                            int status = mPeers.get(device.deviceAddress).status;
+                            if (status == WifiP2pDevice.CONNECTED) {
+                                mWifiNative.p2pStopFind();
+                                needDiscovery = false;
+                            }
+                        }
                         break;
                     case WifiP2pMonitor.P2P_DEVICE_LOST_EVENT:
                         if (message.obj == null) {
@@ -1741,6 +1779,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             public void enter() {
                 if (mVerboseLoggingEnabled) logd(getName());
                 mSavedPeerConfig.invalidate();
+
+                //NOTE: Support wifi-p2p do not coexist BEG-->
+                mP2pConnectingOrConnected = false;
+                //<-- Support wifi-p2p do not coexist END
             }
 
             @Override
@@ -2074,6 +2116,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 if (mVerboseLoggingEnabled) logd(getName());
                 sendMessageDelayed(obtainMessage(GROUP_CREATING_TIMED_OUT,
                         ++sGroupCreatingTimeoutIndex, 0), GROUP_CREATING_WAIT_TIME_MS);
+                //NOTE: Support wifi-p2p do not coexist BEG-->
+                mP2pConnectingOrConnected = true;
+                //<-- Support wifi-p2p do not coexist END
             }
 
             @Override
@@ -2137,6 +2182,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 }
                 return ret;
             }
+
+            //NOTE: Support wifi-p2p do not coexist BEG-->
+            @Override
+            public void exit() {
+                mP2pConnectingOrConnected = false;
+            }
+            //<-- Support wifi-p2p do not coexist END
         }
 
         class UserAuthorizingNegotiationRequestState extends State {
@@ -2367,12 +2419,25 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             startIpClient(mGroup.getInterface(), getHandler());
                             WifiP2pDevice groupOwner = mGroup.getOwner();
                             WifiP2pDevice peer = mPeers.get(groupOwner.deviceAddress);
+                            if (peer == null && !EMPTY_DEVICE_ADDRESS.equals(groupOwner.deviceAddress)) {
+                                mPeers.updateSupplicantDetails(groupOwner);
+                                peer = mPeers.get(groupOwner.deviceAddress);
+                                needDiscovery = true;
+                                logw("update group owner " + groupOwner);
+                            }
+
                             if (peer != null) {
                                 // update group owner details with peer details found at discovery
                                 groupOwner.updateSupplicantDetails(peer);
                                 mPeers.updateStatus(groupOwner.deviceAddress,
                                         WifiP2pDevice.CONNECTED);
                                 sendPeersChangedBroadcast();
+                                if (needDiscovery) {
+                                    if (mWifiNative.p2pFind(DISCOVER_TIMEOUT_S)) {
+                                        mWifiP2pMetrics.incrementServiceScans();
+                                        sendP2pDiscoveryChangedBroadcast(true);
+                                    }
+                                }
                             } else {
                                 // A supplicant bug can lead to reporting an invalid
                                 // group owner address (all zeroes) at times. Avoid a
@@ -2554,6 +2619,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             @Override
             public void enter() {
                 if (mVerboseLoggingEnabled) logd(getName());
+                //NOTE: Support wifi-p2p do not coexist BEG-->
+                mP2pConnectingOrConnected = true;
+                //<-- Support wifi-p2p do not coexist END
                 // Once connected, peer config details are invalid
                 mSavedPeerConfig.invalidate();
                 mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, null);
@@ -2839,6 +2907,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 resetWifiP2pInfo();
                 mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.DISCONNECTED, null, null);
                 sendP2pConnectionChangedBroadcast();
+                //NOTE: Support wifi-p2p do not coexist BEG-->
+                mP2pConnectingOrConnected = false;
+                //<-- Support wifi-p2p do not coexist END
             }
         }
 
@@ -3608,7 +3679,12 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 // default that has low likelihood of collision with a peer
                 String id = mFrameworkFacade.getSecureStringSetting(mContext,
                         Settings.Secure.ANDROID_ID);
-                return "Android_" + id.substring(0, 4);
+                String ssid = WifiFeaturesUtils.FeatureProperty.SUPPORT_SPRD_P2P_CUSTOMIZED_NAME;
+                if (ssid != null && ssid.isEmpty()) {
+                    return "Android_" + id.substring(0, 4);
+                } else {
+                    return ssid;
+                }
             }
             return deviceName;
         }

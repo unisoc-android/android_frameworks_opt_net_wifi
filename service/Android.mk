@@ -35,7 +35,8 @@ LOCAL_JAVA_LIBRARIES := \
 	error_prone_annotations \
 	libprotobuf-java-lite \
 	jsr305 \
-	services
+	services \
+        unisoc_ims_common
 LOCAL_STATIC_JAVA_LIBRARIES := \
 	android.hardware.wifi-V1.0-java \
 	android.hardware.wifi-V1.1-java \
@@ -49,6 +50,10 @@ LOCAL_STATIC_JAVA_LIBRARIES := \
 	wifi_service_proto \
 	ksoap2 \
 	libnanohttpd
+
+LOCAL_STATIC_JAVA_LIBRARIES += \
+	vendor.sprd.hardware.wifi.supplicant-V1.2-java \
+	vendor.sprd.hardware.wifi.hostapd-V1.1-java
 
 LOCAL_REQUIRED_MODULES := \
 	services \

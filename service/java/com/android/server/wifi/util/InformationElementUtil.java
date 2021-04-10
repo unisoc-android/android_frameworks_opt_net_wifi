@@ -417,6 +417,9 @@ public class InformationElementUtil {
         private static final int RSN_AKM_OWE = 0x12ac0f00;
         private static final int RSN_AKM_EAP_SUITE_B_192 = 0x0cac0f00;
 
+        private static final int WPA2_AKM_WAPI_PSK = 0x02721400;
+        private static final int WPA2_AKM_WAPI_CERT = 0x01721400;
+
         private static final int WPA_CIPHER_NONE = 0x00f25000;
         private static final int WPA_CIPHER_TKIP = 0x02f25000;
         private static final int WPA_CIPHER_CCMP = 0x04f25000;
@@ -426,6 +429,7 @@ public class InformationElementUtil {
         private static final int RSN_CIPHER_CCMP = 0x04ac0f00;
         private static final int RSN_CIPHER_NO_GROUP_ADDRESSED = 0x07ac0f00;
         private static final int RSN_CIPHER_GCMP_256 = 0x09ac0f00;
+        private static final int RSN_CIPHER_SMS4 = 0x01721400;
 
         public ArrayList<Integer> protocol;
         public ArrayList<ArrayList<Integer>> keyManagement;
@@ -436,6 +440,78 @@ public class InformationElementUtil {
         public boolean isWPS;
 
         public Capabilities() {
+        }
+
+        // WAPIE format (size unit: byte)
+        //
+        // | Element ID | Length | Version |
+        //            1           1         2
+        // | AKM Suite Count | AKM Suite List |
+        //            2                  4 * n
+        // | Pairwise Cipher Suite Count | Pairwise Cipher Suite List |
+        //                  2                            4 * m
+        // | Group Data Cipher Suite | WAPI Capabilities |
+        //                     4 * n               2
+        // | BKID Count | BKID List |
+        //         2              16 * s
+        //
+        // Note: InformationElement.bytes has 'Element ID' and 'Length'
+        //       stripped off already
+        private void parseWapiElement(InformationElement ie) {
+            ByteBuffer buf = ByteBuffer.wrap(ie.bytes).order(ByteOrder.LITTLE_ENDIAN);
+
+            try {
+                // version
+                if (buf.getShort() != RSNE_VERSION) {// 1
+                    // incorrect version
+                    return;
+                }
+
+                // found the RSNE IE, hence start building the capability string
+                protocol.add(ScanResult.PROTOCOL_WAPI);
+
+                // AKM
+                // AKM suite count
+                short akmCount = buf.getShort();
+                ArrayList<Integer> wapiKeyManagement = new ArrayList<>();
+
+                for (int i = 0; i < akmCount; i++) {
+                    int akm = buf.getInt();
+                    switch (akm) {
+                        case WPA2_AKM_WAPI_PSK:
+                            wapiKeyManagement.add(ScanResult.KEY_MGMT_WAPI_PSK);
+                            break;
+                        case WPA2_AKM_WAPI_CERT:
+                            wapiKeyManagement.add(ScanResult.KEY_MGMT_WAPI_CERT);
+                            break;
+                        default:
+                            // do nothing
+                            Log.w("IE_Capabilities", "Unknown WAPI akm suite: "
+                                    + Integer.toHexString(akm));
+                            break;
+                    }
+                }
+                // Default AKM
+                //if (wapiKeyManagement.isEmpty()) {
+                //    wapiKeyManagement.add(ScanResult.KEY_MGMT_EAP);
+                //}
+                keyManagement.add(wapiKeyManagement);
+
+                // pairwise cipher suite count
+                short cipherCount = buf.getShort();
+                ArrayList<Integer> wapiPairwiseCipher = new ArrayList<>();
+                // pairwise cipher suite list
+                for (int i = 0; i < cipherCount; i++) {
+                    wapiPairwiseCipher.add(parseRsnCipher(buf.getInt()));
+                }
+                pairwiseCipher.add(wapiPairwiseCipher);
+
+                // group data cipher suite
+                groupCipher.add(parseRsnCipher(buf.getInt()));
+
+            } catch (BufferUnderflowException e) {
+                Log.e("IE_Capabilities", "Couldn't parse RSNE, buffer underflow");
+            }
         }
 
         // RSNE format (size unit: byte)
@@ -514,6 +590,12 @@ public class InformationElementUtil {
                         case RSN_AKM_EAP_SUITE_B_192:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_EAP_SUITE_B_192);
                             break;
+                        case WPA2_AKM_WAPI_PSK:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_WAPI_PSK);
+                            break;
+                        case WPA2_AKM_WAPI_CERT:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_WAPI_CERT);
+                            break;
                         default:
                             // do nothing
                             break;
@@ -555,6 +637,8 @@ public class InformationElementUtil {
                 case RSN_CIPHER_GCMP_256:
                     return ScanResult.CIPHER_GCMP_256;
                 case RSN_CIPHER_NO_GROUP_ADDRESSED:
+                    return ScanResult.CIPHER_NO_GROUP_ADDRESSED;
+                case RSN_CIPHER_SMS4:
                     return ScanResult.CIPHER_NO_GROUP_ADDRESSED;
                 default:
                     Log.w("IE_Capabilities", "Unknown RSN cipher suite: "
@@ -680,6 +764,9 @@ public class InformationElementUtil {
             isESS = beaconCap.get(CAP_ESS_BIT_OFFSET);
             isPrivacy = beaconCap.get(CAP_PRIVACY_BIT_OFFSET);
             for (InformationElement ie : ies) {
+                if (ie.id == InformationElement.EID_WAPI) {
+                    parseWapiElement(ie);
+                }
                 if (ie.id == InformationElement.EID_RSN) {
                     parseRsnElement(ie);
                 }
@@ -739,6 +826,8 @@ public class InformationElementUtil {
                     return "WPA";
                 case ScanResult.PROTOCOL_RSN:
                     return "RSN";
+                case ScanResult.PROTOCOL_WAPI:
+                    return "WAPI";
                 default:
                     return "?";
             }
@@ -770,6 +859,10 @@ public class InformationElementUtil {
                     return "FT/SAE";
                 case ScanResult.KEY_MGMT_EAP_SUITE_B_192:
                     return "EAP_SUITE_B_192";
+                case ScanResult.KEY_MGMT_WAPI_PSK:
+                    return "WAPI-PSK";
+                case ScanResult.KEY_MGMT_WAPI_CERT:
+                    return "WAPI-CERT";
                 default:
                     return "?";
             }

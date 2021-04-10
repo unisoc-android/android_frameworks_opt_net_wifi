@@ -47,6 +47,11 @@ public class ScanResultMatchInfo {
      * Fetch network type from network configuration.
      */
     public static @WifiConfiguration.SecurityType int getNetworkType(WifiConfiguration config) {
+        if (WifiConfigurationUtil.isConfigForWapiPskNetwork(config)) {
+            return WifiConfiguration.SECURITY_TYPE_WAPI_PSK;
+        } else if (WifiConfigurationUtil.isConfigForWapiCertNetwork(config)) {
+            return WifiConfiguration.SECURITY_TYPE_WAPI_CERT;
+        }
         if (WifiConfigurationUtil.isConfigForSaeNetwork(config)) {
             return WifiConfiguration.SECURITY_TYPE_SAE;
         } else if (WifiConfigurationUtil.isConfigForPskNetwork(config)) {
@@ -79,6 +84,11 @@ public class ScanResultMatchInfo {
      * Fetch network type from scan result.
      */
     public static @WifiConfiguration.SecurityType int getNetworkType(ScanResult scanResult) {
+        if (ScanResultUtil.isScanResultForWapiPskNetwork(scanResult)) {
+            return WifiConfiguration.SECURITY_TYPE_WAPI_PSK;
+        } else if (ScanResultUtil.isScanResultForWapiCertNetwork(scanResult)) {
+            return WifiConfiguration.SECURITY_TYPE_WAPI_CERT;
+        }
         if (ScanResultUtil.isScanResultForSaeNetwork(scanResult)) {
             return WifiConfiguration.SECURITY_TYPE_SAE;
         } else if (ScanResultUtil.isScanResultForPskNetwork(scanResult)) {

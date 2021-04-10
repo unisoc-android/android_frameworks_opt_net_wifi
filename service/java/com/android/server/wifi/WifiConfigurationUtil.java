@@ -145,6 +145,21 @@ public class WifiConfigurationUtil {
                 || config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X));
     }
 
+
+    /**
+     * Helper method to check if the provided |config| corresponds to a WAPI PSK network or not.
+     */
+    public static boolean isConfigForWapiPskNetwork(WifiConfiguration config) {
+        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_PSK);
+    }
+
+    /**
+     * Helper method to check if the provided |config| corresponds to a WAPI CERT network or not.
+     */
+    public static boolean isConfigForWapiCertNetwork(WifiConfiguration config) {
+        return (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_CERT));
+    }
+
     /**
      * Helper method to check if the provided |config| corresponds to a EAP Suite-B network or not.
      */
@@ -257,6 +272,11 @@ public class WifiConfigurationUtil {
             }
             if (!TextUtils.equals(existingEnterpriseConfig.getPassword(),
                                     newEnterpriseConfig.getPassword())) {
+                return true;
+            }
+            if (existingEnterpriseConfig.getSimNum() != newEnterpriseConfig.getSimNum()) {
+                Log.d(TAG, "hasEnterpriseConfigChanged existingEnterpriseConfig simNum = "
+                        + existingEnterpriseConfig.getSimNum() + ",newEnterpriseConfig simNum = " + existingEnterpriseConfig.getSimNum());
                 return true;
             }
             X509Certificate[] existingCaCerts = existingEnterpriseConfig.getCaCertificates();

@@ -16,6 +16,7 @@
 
 package com.android.server.wifi;
 
+import com.sprd.server.wifi.VoWifiAssistor;
 import android.annotation.NonNull;
 import android.content.Context;
 import android.content.Intent;
@@ -54,6 +55,8 @@ public class ClientModeManager implements ActiveModeManager {
 
     private boolean mExpectedStop = false;
 
+    private VoWifiAssistor mVoWifiAssistor;
+
     ClientModeManager(Context context, @NonNull Looper looper, WifiNative wifiNative,
             Listener listener, WifiMetrics wifiMetrics, ClientModeImpl clientModeImpl) {
         mContext = context;
@@ -62,6 +65,18 @@ public class ClientModeManager implements ActiveModeManager {
         mWifiMetrics = wifiMetrics;
         mClientModeImpl = clientModeImpl;
         mStateMachine = new ClientModeStateMachine(looper);
+    }
+
+    ClientModeManager(Context context, @NonNull Looper looper, WifiNative wifiNative,
+            Listener listener, WifiMetrics wifiMetrics, ClientModeImpl clientModeImpl,
+            VoWifiAssistor voWifiAssistor) {
+        mContext = context;
+        mWifiNative = wifiNative;
+        mListener = listener;
+        mWifiMetrics = wifiMetrics;
+        mClientModeImpl = clientModeImpl;
+        mStateMachine = new ClientModeStateMachine(looper);
+        mVoWifiAssistor = voWifiAssistor;
     }
 
     /**
@@ -86,6 +101,15 @@ public class ClientModeManager implements ActiveModeManager {
                                 WifiManager.WIFI_STATE_ENABLING);
             }
         }
+        if (mVoWifiAssistor.isVoWifiAttached() && !mVoWifiAssistor.isSoftApStarted()) {
+            mVoWifiAssistor.delayTurnOffWifi(this);
+            mStateMachine.sendMessageDelayed(ClientModeStateMachine.CMD_STOP, 500);
+        } else {
+            mStateMachine.quitNow();
+        }
+    }
+
+    public void stopImmediately() {
         mStateMachine.quitNow();
     }
 
@@ -162,6 +186,7 @@ public class ClientModeManager implements ActiveModeManager {
     private class ClientModeStateMachine extends StateMachine {
         // Commands for the state machine.
         public static final int CMD_START = 0;
+        public static final int CMD_STOP = 1;
         public static final int CMD_INTERFACE_STATUS_CHANGED = 3;
         public static final int CMD_INTERFACE_DESTROYED = 4;
         public static final int CMD_INTERFACE_DOWN = 5;
@@ -266,6 +291,7 @@ public class ClientModeManager implements ActiveModeManager {
                     }
                     // if the interface goes down we should exit and go back to idle state.
                     Log.d(TAG, "interface down!");
+                    mExpectedStop = true;
                     updateWifiState(WifiManager.WIFI_STATE_UNKNOWN,
                                     WifiManager.WIFI_STATE_ENABLED);
                     mStateMachine.sendMessage(CMD_INTERFACE_DOWN);
@@ -284,6 +310,10 @@ public class ClientModeManager implements ActiveModeManager {
                 switch(message.what) {
                     case CMD_START:
                         // Already started, ignore this command.
+                        break;
+                    case CMD_STOP:
+                        Log.d(TAG, "CMD_STOP - quitNow");
+                        mStateMachine.quitNow();
                         break;
                     case CMD_INTERFACE_DOWN:
                         Log.e(TAG, "Detected an interface down, reporting failure to SelfRecovery");
